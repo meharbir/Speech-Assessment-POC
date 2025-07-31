@@ -1,0 +1,47 @@
+.mode-selector-container {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.modes-wrapper {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-top: 30px;
+  flex-wrap: wrap;
+}
+
+.mode-card {
+  width: 300px;
+  padding: 20px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  background-color: #f8f9fa;
+  display: flex;
+  flex-direction: column;
+}
+
+.mode-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+  border-color: #3498db;
+}
+
+.mode-card h2 {
+  margin-top: 0;
+  color: #2c3e50;
+}
+
+.mode-card p {
+  flex-grow: 1;
+  color: #555;
+}
+
+.grade-level {
+  font-size: 0.9em;
+  font-weight: bold;
+  color: #3498db;
+}
