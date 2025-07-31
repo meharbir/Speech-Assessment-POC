@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sudo apt install:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(touch:*)",
+      "Bash(mkdir:*)",
+      "Bash(pip install:*)",
+      "Bash(rm:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(./venv/bin/activate)",
+      "Bash(./venv/Scripts/activate)",
+      "Bash(./venv/Scripts/pip.exe install pydub)",
+      "Bash(./venv/Scripts/python.exe test_ffmpeg.py)",
+      "Bash(./venv/Scripts/pip.exe install pyaudioop)"
+    ],
+    "deny": []
+  }
+}

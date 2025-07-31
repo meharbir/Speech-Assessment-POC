@@ -1,0 +1,132 @@
+.dashboard-container {
+    display: flex;
+    text-align: left;
+    gap: 20px;
+}
+
+.sidebar {
+    flex: 0 0 250px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+}
+
+.sidebar h3 {
+    margin-top: 0;
+    color: #34495e;
+    border-bottom: 2px solid #ecf0f1;
+    padding-bottom: 10px;
+}
+
+.sidebar ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.sidebar li {
+    padding: 15px;
+    margin: 5px 0;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sidebar li:hover {
+    background-color: #e9ecef;
+}
+
+.sidebar li.active {
+    background-color: #3498db;
+    color: white;
+}
+
+.sidebar li span {
+    background-color: rgba(0,0,0,0.1);
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 0.9em;
+}
+
+.sidebar li.active span {
+    background-color: rgba(255,255,255,0.2);
+}
+
+.main-content {
+    flex-grow: 1;
+}
+
+.view-container h2 {
+    color: #2c3e50;
+    border-bottom: 2px solid #ecf0f1;
+    padding-bottom: 10px;
+}
+
+.transcript-container {
+    margin-top: 30px;
+}
+
+.transcript-text {
+    background-color: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    line-height: 1.8;
+    font-size: 1.2em;
+}
+
+.word-correct {
+    color: #27ae60;
+}
+
+.word-incorrect {
+    color: #c0392b;
+    font-weight: bold;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* Popup Styles */
+.popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.popup-content {
+  background: white;
+  padding: 20px 30px;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 500px;
+  position: relative;
+}
+
+.popup-close {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  background: none;
+  border: none;
+  font-size: 2em;
+  cursor: pointer;
+}
+
+.listen-button {
+    background-color: #27ae60;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    margin-top: 10px;
+}
