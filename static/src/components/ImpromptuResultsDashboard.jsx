@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
+import axios from 'axios';
 import ScoreCard from './ScoreCard';
 import './ImpromptuDashboard.css';
 
 const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
   const { aiCoachAnalysis, transcript, azureMetrics } = results;
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
 
   // Error boundary and empty state handling
   const safeAiCoachAnalysis = {
@@ -21,7 +23,33 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
 
   const safeAzureMetrics = {
     fluencyScore: azureMetrics?.fluencyScore || 0,
-    prosodyScore: azureMetrics?.prosodyScore || 0
+    prosodyScore: azureMetrics?.prosodyScore || 0,
+    wordCount: azureMetrics?.wordCount || 0,
+    duration: azureMetrics?.duration || 0
+  };
+
+  const wordsPerMinute = safeAzureMetrics.duration > 0 
+    ? Math.round((safeAzureMetrics.wordCount / safeAzureMetrics.duration) * 60) 
+    : 0;
+  
+  const playSampleAudio = async () => {
+    if (isAudioPlaying) return;
+    setIsAudioPlaying(true);
+    try {
+      const response = await axios.post(
+        'http://localhost:8000/api/synthesize-paragraph', 
+        { text: safeAiCoachAnalysis.rewritten_sample }, // Send text in request body
+        { responseType: 'blob' }
+      );
+      const audioUrl = URL.createObjectURL(response.data);
+      const audio = new Audio(audioUrl);
+      audio.play();
+      audio.onended = () => setIsAudioPlaying(false);
+    } catch (error) {
+      console.error("Error playing sample audio:", error);
+      alert("Could not play the audio sample.");
+      setIsAudioPlaying(false);
+    }
   };
 
   return (
@@ -71,9 +99,9 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
 
       <div className="feedback-section">
         <h3>Grammar Corrections</h3>
-        {aiCoachAnalysis.grammar_errors.length > 0 ? (
+        {safeAiCoachAnalysis.grammar_errors.length > 0 ? (
           <ul className="feedback-list">
-            {aiCoachAnalysis.grammar_errors.map((item, i) => (
+            {safeAiCoachAnalysis.grammar_errors.map((item, i) => (
               <li key={i}>
                 <p><strong>Original:</strong> <span className="text-original">{item.error}</span></p>
                 <p><strong>Correction:</strong> <span className="text-correction">{item.correction}</span></p>
@@ -95,12 +123,15 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
 
       <div className="feedback-section">
         <h3>📝 Sample Improved Version</h3>
-        <div className="rewritten-sample">
-          <p className="sample-text">{safeAiCoachAnalysis.rewritten_sample}</p>
-          <p className="sample-note">
-            <em>This is how you could express your ideas with better grammar, vocabulary, and structure.</em>
-          </p>
+        <div className="sample-container">
+            <p className="transcript-display">{safeAiCoachAnalysis.rewritten_sample}</p>
+            <button className="listen-button" onClick={playSampleAudio} disabled={isAudioPlaying}>
+              {isAudioPlaying ? 'Playing...' : '▶️ Listen to Sample'}
+            </button>
         </div>
+        <p className="sample-note">
+          <em>This is how you could express your ideas with better grammar, vocabulary, and structure.</em>
+        </p>
       </div>
 
       <div className="feedback-section">
@@ -137,12 +168,16 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
         <h3>📊 Speaking Metrics</h3>
         <div className="metrics-grid">
           <div className="metric-item">
-            <span className="metric-label">Azure Fluency Score:</span>
-            <span className="metric-value">{safeAzureMetrics.fluencyScore}/100</span>
+            <span className="metric-label">Word Count:</span>
+            <span className="metric-value">{safeAzureMetrics.wordCount}</span>
           </div>
           <div className="metric-item">
-            <span className="metric-label">Prosody (Rhythm) Score:</span>
-            <span className="metric-value">{safeAzureMetrics.prosodyScore}/100</span>
+            <span className="metric-label">Duration:</span>
+            <span className="metric-value">{safeAzureMetrics.duration.toFixed(1)}s</span>
+          </div>
+          <div className="metric-item">
+            <span className="metric-label">Words Per Minute:</span>
+            <span className="metric-value">{wordsPerMinute}</span>
           </div>
         </div>
       </div>

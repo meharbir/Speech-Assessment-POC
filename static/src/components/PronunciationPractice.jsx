@@ -12,7 +12,7 @@ const PronunciationPractice = () => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
-  const referenceText = "The two characters in this story are the rabbit and the turtle.";
+  const [referenceText, setReferenceText] = useState("The two characters in this story are the rabbit and the turtle.");
 
   const handleRecord = async () => {
     setResults(null);
@@ -65,8 +65,14 @@ const PronunciationPractice = () => {
 
   return (
     <div className="practice-container">
-      <h2>Practice Sentence</h2>
-      <p className="reference-text">{referenceText}</p>
+      <h2>Practice Text</h2>
+      <textarea 
+        className="reference-text-input"
+        value={referenceText}
+        onChange={(e) => setReferenceText(e.target.value)}
+        placeholder="Enter text to practice pronunciation..."
+        rows={4}
+      />
       <div className="controls">
         <button onClick={handleRecord} disabled={isRecording || isProcessing}>Record</button>
         <button onClick={handleStop} disabled={!isRecording || isProcessing}>Stop</button>
