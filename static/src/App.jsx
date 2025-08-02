@@ -1,21 +1,27 @@
 import React, { useState } from 'react';
 import './App.css';
 import SpeakingModeSelector from './components/SpeakingModeSelector';
-import PronunciationPractice from './components/PronunciationPractice'; // We will create this next
-import ImpromptuPractice from './components/ImpromptuPractice'; // We will create this next
+import PronunciationPractice from './components/PronunciationPractice';
+import ImpromptuPractice from './components/ImpromptuPractice';
+import BatchPractice from './components/BatchPractice'; // Renamed component
+import ChunkedImpromptuPractice from './components/ChunkedImpromptuPractice'; // New component
 
 function App() {
-  const [mode, setMode] = useState(null); // 'pronunciation' or 'impromptu'
+  const [mode, setMode] = useState(null);
 
   const renderContent = () => {
     if (mode === 'pronunciation') {
-      // For now, these are just placeholders
       return <PronunciationPractice />;
     }
     if (mode === 'impromptu') {
       return <ImpromptuPractice />;
     }
-    // If no mode is selected, show the selector
+    if (mode === 'impromptu-chunked') {
+      return <ChunkedImpromptuPractice />;
+    }
+    if (mode === 'impromptu-batch') {
+      return <BatchPractice />;
+    }
     return <SpeakingModeSelector onModeSelect={setMode} />;
   };
 
