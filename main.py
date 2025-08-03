@@ -87,48 +87,46 @@ async def process_chunk_async(chunk_data: bytes) -> dict:
     return stt_result
 
 def get_ai_coach_feedback(transcript: str, topic: str, duration_seconds: float, word_count: int) -> dict:
-    if not openai_client: 
+    if not openai_client:
         return {"error": "OpenAI client not configured."}
     
     words_per_minute = (word_count / duration_seconds) * 60 if duration_seconds > 0 else 0
 
-    # --- NEW, HIGHLY-DETAILED "SENIOR ENGLISH TUTOR" PROMPT ---
+    # --- FINAL MVP "SENIOR ENGLISH TUTOR" PROMPT ---
     prompt = f"""
-    You are an expert, encouraging, and insightful Senior English Tutor evaluating a 4th-grade student's impromptu speech.
-    The student's task was to speak for 1-2 minutes on the topic: "{topic}".
-    Their speech was {duration_seconds:.1f} seconds long with a pace of {words_per_minute:.0f} words per minute.
-    The transcript of their speech is: "{transcript}"
+    You are an expert, encouraging, and insightful Senior English Tutor providing a detailed analysis of an impromptu speech.
+    The user's task was to speak on the topic: "{topic}".
+    The transcript is: "{transcript}"
 
-    Your task is to provide a detailed, personalized, and actionable evaluation. Your response MUST be a valid JSON object.
-    You MUST provide a value for every key. If there are no grammar errors, provide an empty array for "grammar_errors".
-
-    Scoring Guidelines (0-100):
-    - 0-40: Beginner (many errors, needs significant improvement)
-    - 41-70: Intermediate (some errors, generally understandable)
-    - 71-90: Advanced (minor errors, clear and effective communication)
-    - 91-100: Proficient (excellent, near-native level)
+    Your task is to provide a comprehensive, personalized, and actionable evaluation in a valid JSON object.
+    You MUST provide a value for every key. For arrays, return all items you find; if none, return an empty array.
 
     Here is the required JSON structure. Follow it with 100% accuracy:
     {{
-        "fluency_score": <integer: Score based on pace and rhythm. Target for a 4th grader is ~110-140 WPM>,
-        "fluency_feedback": "<string: A personalized comment on their speaking pace and rhythm.>",
-        "grammar_score": <integer: Score based on the number and severity of errors>,
+        "fluency_score": <integer>,
+        "fluency_feedback": "<string: Personalized comment on pace and rhythm.>",
+        "grammar_score": <integer>,
         "grammar_errors": [
-            {{"error": "<string: The exact phrase with the error>", "correction": "<string: The corrected phrase>", "explanation": "<string: A simple, encouraging explanation of the grammar rule>"}}
+            {{"error": "<string: Phrase with error>", "correction": "<string: Corrected phrase>", "explanation": "<string: Simple explanation>"}}
         ],
-        "vocabulary_score": <integer: Score based on word choice variety and appropriateness>,
-        "vocabulary_feedback": "<string: A personalized comment on their word choice. Suggest 1-2 more descriptive words they could have used.>",
-        "coherence_score": <integer: Score based on how logical and easy to follow the speech is>,
-        "coherence_feedback": "<string: A personalized comment on the structure and flow of their ideas.>",
+        "vocabulary_score": <integer>,
+        "vocabulary_feedback": "<string: Personalized comment on word choice. Suggest 1-2 better words.>",
+        "coherence_score": <integer>,
+        "coherence_feedback": "<string: Personalized comment on structure, MUST include a specific example from the transcript.>",
+        "argument_strength_analysis": "<string: Assess if the student supported their main points with reasons or examples. Provide a suggestion on how to make their argument more persuasive.>",
+        "structural_blueprint": "<string: Outline the structure of the student's speech (e.g., Opening -> Point 1 -> Point 2 -> Conclusion). Suggest a clearer blueprint if needed.>",
         "positive_highlights": [
-            "<string: A specific, positive, and encouraging comment about something they did well.>"
+            "<string: A specific, positive, and encouraging comment.>"
         ],
-        "rewritten_sample": "<string: Rewrite their speech into a short, improved paragraph (2-3 sentences) that demonstrates better grammar, vocabulary, and structure. This is a model answer for them to learn from.>"
+        "rewritten_sample": "<string: Rewrite the user's ENTIRE speech into an improved version of a SIMILAR LENGTH at an appropriate, slightly more advanced level.>"
     }}
     """
     try:
         response = openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": prompt}], response_format={"type": "json_object"})
-        return json.loads(response.choices[0].message.content)
+        try:
+            return json.loads(response.choices[0].message.content)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=500, detail="OpenAI returned malformed JSON.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI API Error: {str(e)}")
 

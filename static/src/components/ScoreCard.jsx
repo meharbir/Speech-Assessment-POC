@@ -1,30 +1,19 @@
 import React from 'react';
-import './ImpromptuDashboard.css'; // We will create this next
+import './ImpromptuDashboard.css';
 
-const ScoreCard = ({ title, score, feedback }) => {
+const ScoreCard = ({ title, score, feedback, icon }) => {
   const getScoreColor = (s) => {
-    if (s > 90) return '#27ae60'; // Green
-    if (s > 70) return '#2980b9'; // Blue
-    if (s > 40) return '#f39c12'; // Yellow
-    return '#c0392b'; // Red
+    if (s >= 90) return '#27ae60'; // Emerald
+    if (s >= 70) return '#2980b9'; // Belize Hole
+    if (s >= 40) return '#f39c12'; // Orange
+    return '#c0392b'; // Pomegranate
   };
 
   return (
     <div className="score-card">
-      <h4>{title}</h4>
-      <div className="score-display">
-        <div className="score-circle" style={{ borderColor: getScoreColor(score) }}>
-          <span className="score-number">{score}</span>
-        </div>
-        <div className="progress-bar">
-          <div 
-            className="progress-fill" 
-            style={{ 
-              width: `${score}%`, 
-              backgroundColor: getScoreColor(score) 
-            }}
-          ></div>
-        </div>
+      <h4><span>{icon}</span> {title}</h4>
+      <div className="score-circle" style={{ borderColor: getScoreColor(score) }}>
+        <span className="score-number">{score}</span>
       </div>
       <p className="score-feedback">{feedback}</p>
     </div>
