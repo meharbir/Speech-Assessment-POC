@@ -104,3 +104,47 @@ These features will be developed on separate `git` branches to ensure the stabil
 **Phase 4: The Teacher's View & Contextual AI**
 -   Build the Teacher Dashboard for viewing student progress.
 -   Implement the "AI Memory" (RAG) feature for context-aware feedback.
+
+
+
+------
+
+Add Computer Vision for facial tracking, expressions, body language, gestures, etc. 
+Check with rubric given by cbse
+
+
+
+The Cost of Computer Vision AI
+Now for the critical financial question. Adding video analysis is a powerful upgrade, but it comes with a significant increase in operational costs. Video processing is much more resource-intensive than audio processing.
+
+Let's use our same usage assumption: 10 minutes per week per student, which is 360 minutes per academic year.
+
+1. AI API Calls (Computer Vision):
+Service: A top-tier service like Amazon Rekognition or Google Vision AI.
+
+Pricing: These services are priced per minute of video analyzed. A realistic, blended rate is ~$0.12 USD per minute.
+
+Calculation: 360 minutes/year × ~$0.12/minute = $43.20
+
+2. Increased Cloud Costs (Storage & Bandwidth):
+Data Storage: Video files are much larger than audio. Storing ~4GB of compressed video per student per year will cost more.
+
+Bandwidth & Compute: Sending and processing these larger files requires more server resources.
+
+Blended Cost: A conservative estimate for these additional cloud costs is ~$4.00 per student/year.
+
+Total Estimated Cost for the Video Feature:
+~$43.20 (AI) + ~$4.00 (Cloud) = ~$47.20 USD per student per year.
+
+In Indian Rupees (at ~₹84/USD), this is approximately ₹3,950 per student per year.
+
+The New Total Operational Cost (Audio + Video)
+To offer a fully comprehensive tool that assesses both speech and body language, your costs would be:
+
+Audio Analysis Cost (Intensive Plan): ~₹1,500
+
+Video Analysis Cost: ~₹3,950
+
+Total Combined Operational Cost: ~₹5,450 per student per year.
+
+Strategic Advice: This significant cost increase confirms that video analysis is a premium, "Pro Tier" feature. You would need to charge a school a substantially higher price (e.g., ₹8,000 - ₹10,000 per student/year) for this comprehensive package to maintain a healthy business margin. This is an excellent upsell opportunity for your most advanced and well-funded client schools after you have successfully launched your audio-only MVP.

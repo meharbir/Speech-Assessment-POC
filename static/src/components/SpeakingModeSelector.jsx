@@ -12,23 +12,35 @@ const SpeakingModeSelector = ({ onModeSelect }) => {
           <span className="grade-level">Scripted Speaking</span>
         </div>
         
-        {/* --- REORDERED FOR BETTER UX --- */}
-        <div className="mode-card" onClick={() => onModeSelect('impromptu-chunked')}>
-          <h2>🗣️ Impromptu Speaking</h2>
-          <p>Deliver a speech (1-5 min) and get fast, detailed feedback.</p>
-          <span className="grade-level">Recommended Mode</span>
-        </div>
         <div className="mode-card" onClick={() => onModeSelect('impromptu')}>
           <h2>🎤 Short Impromptu (&lt; 1 min)</h2>
           <p>Speak on a topic and get instant, real-time feedback.</p>
           <span className="grade-level">Fastest Analysis</span>
         </div>
+        
+        <div className="mode-card" onClick={() => onModeSelect('impromptu-chunked')}>
+          <h2>🗣️ Impromptu Speaking</h2>
+          <p>Deliver a longer speech (1-5 min) and get fast, detailed feedback.</p>
+          <span className="grade-level">Recommended Mode</span>
+        </div>
+        
+        <div className="mode-card" onClick={() => onModeSelect('impromptu_experimental')}>
+          <h2>🔬 Experimental Pronunciation</h2>
+          <p>Speak freely and get an experimental pronunciation score based on an AI-generated script.</p>
+          <span className="grade-level">Advanced Test</span>
+        </div>
+        
         <div className="mode-card" onClick={() => onModeSelect('impromptu-batch')}>
-          <h2>🎙️ Batch Processing (Archival)</h2>
+          <h2>🎙️ Batch Processing</h2>
           <p>For very long audio files. Analysis may take several minutes.</p>
           <span className="grade-level">Advanced Use</span>
         </div>
-
+        
+        <div className="mode-card" onClick={() => onModeSelect('ab-test')}>
+          <h2>🔬 A/B Test (Azure vs. Whisper)</h2>
+          <p>Compare Azure and Whisper transcription services side-by-side.</p>
+          <span className="grade-level">Research Mode</span>
+        </div>
       </div>
     </div>
   );

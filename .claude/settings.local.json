@@ -16,7 +16,10 @@
       "Bash(./venv/Scripts/pip.exe install pydub)",
       "Bash(./venv/Scripts/python.exe test_ffmpeg.py)",
       "Bash(./venv/Scripts/pip.exe install pyaudioop)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "WebFetch(domain:learn.microsoft.com)",
+      "Bash(find:*)",
+      "WebFetch(domain:api.github.com)"
     ],
     "deny": []
   }

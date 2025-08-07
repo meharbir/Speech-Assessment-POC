@@ -106,6 +106,50 @@
 .explanation { font-style: italic; color: #7f8c8d; font-size: 0.9em; margin-top: 5px; }
 .highlight { color: #2980b9; font-weight: 500; }
 
+.detailed-feedback {
+    line-height: 1.8;
+    color: #34495e;
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+
+.grammar-concept {
+    margin-top: 8px;
+}
+
+.concept-tag {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+.coherence-details, .argument-details {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+
+.coherence-details p, .argument-details p {
+    margin: 10px 0;
+    line-height: 1.8;
+}
+
+.sub-list {
+    margin: 10px 0 10px 20px;
+    list-style-type: disc;
+}
+
+.sub-list li {
+    margin: 8px 0;
+    line-height: 1.6;
+}
+
 .blueprint-text {
   white-space: pre-wrap;
   font-family: monospace;
@@ -153,4 +197,40 @@
 .listen-button:disabled {
   background-color: #95a5a6;
   cursor: not-allowed;
+}
+
+/* Tab Styles */
+.tabs {
+  display: flex;
+  border-bottom: 2px solid #ecf0f1;
+  margin-bottom: 20px;
+}
+.tab-button {
+  padding: 15px 25px;
+  cursor: pointer;
+  border: none;
+  background-color: transparent;
+  font-size: 1.1em;
+  font-weight: bold;
+  color: #7f8c8d;
+  position: relative;
+  bottom: -2px;
+}
+.tab-button.active {
+  color: #3498db;
+  border-bottom: 3px solid #3498db;
+}
+
+.ab-test-results-container {
+    width: 100%;
+}
+.columns-wrapper {
+    display: flex;
+    gap: 20px;
+}
+.result-column {
+    flex: 1;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 15px;
 }
