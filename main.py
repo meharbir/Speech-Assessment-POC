@@ -23,11 +23,12 @@ from sqlmodel import create_engine, SQLModel
 
 # --- NEW IMPORTS FOR AUTH ---
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer
+from fastapi import Request
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlmodel import Session, create_engine, select, SQLModel
-from typing import Annotated
+from typing import Annotated, List
 from datetime import datetime, timedelta, timezone
 # --- END NEW IMPORTS ---
 
@@ -56,6 +57,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme_optional = HTTPBearer(auto_error=False)
 
 # --- HELPER & DEPENDENCY FUNCTIONS ---
 def get_session():
@@ -77,6 +79,46 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    session: Annotated[Session, Depends(get_session)]
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = session.exec(select(User).where(User.email == email)).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+async def get_optional_current_user(
+    token: Annotated[str | None, Depends(oauth2_scheme_optional)] = None,
+    session: Annotated[Session, Depends(get_session)] = None
+) -> User | None:
+    if token is None:
+        return None
+        
+    try:
+        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            return None
+    except (JWTError, AttributeError):
+        return None
+    
+    user = session.exec(select(User).where(User.email == email)).first()
+    return user
 
 # --- FEATURE FLAGS ---
 ENABLE_TEXT_CORRECTION = False  # Set to True to enable GPT-4 text correction for pronunciation assessment
@@ -152,6 +194,13 @@ def get_pronunciation_assessment(wav_data: bytes, reference_text: str) -> dict:
         response.raise_for_status()
         result = response.json()
         
+        # DETAILED DEBUG: Print the COMPLETE Azure response
+        print(f"\n{'#'*80}")
+        print(f"COMPLETE AZURE PRONUNCIATION RESPONSE:")
+        print(f"{'#'*80}")
+        print(json.dumps(result, indent=2))
+        print(f"{'#'*80}\n")
+        
         # Debug: Print what Azure actually returns
         if result.get("NBest") and len(result["NBest"]) > 0:
             nbest = result["NBest"][0]
@@ -161,6 +210,15 @@ def get_pronunciation_assessment(wav_data: bytes, reference_text: str) -> dict:
             print(f"  - FluencyScore: {nbest.get('FluencyScore', 'NOT FOUND')}")
             print(f"  - ProsodyScore: {nbest.get('ProsodyScore', 'NOT FOUND')}")
             print(f"  - CompletenessScore: {nbest.get('CompletenessScore', 'NOT FOUND')}")
+            
+            # Check for Words array and phoneme data
+            if 'Words' in nbest:
+                print(f"  - Words array found with {len(nbest['Words'])} words")
+                if len(nbest['Words']) > 0:
+                    first_word = nbest['Words'][0]
+                    print(f"  - First word structure: {json.dumps(first_word, indent=4)}")
+            else:
+                print(f"  - Words array: NOT FOUND")
         
         return result
     except requests.exceptions.RequestException as e:
@@ -260,43 +318,31 @@ def get_ai_coach_feedback(transcript: str, topic: str, duration_seconds: float, 
     
     words_per_minute = (word_count / duration_seconds) * 60 if duration_seconds > 0 else 0
 
-    # --- HYBRID POSITIVE CARDS + DETAILED FEEDBACK PROMPT ---
     prompt = f"""
     You are an expert, encouraging, and insightful Senior English Tutor providing a detailed analysis of an impromptu speech.
     The user's task was to speak on the topic: "{topic}".
     The transcript is: "{transcript}"
 
     Your task is to provide a comprehensive, personalized, and actionable evaluation in a valid JSON object.
-    You MUST provide a value for every key. For arrays, return ALL relevant items you find. If none, return an empty array.
-
-    CRITICAL INSTRUCTIONS:
-    - For vocabulary suggestions: Provide SLIGHTLY more advanced alternatives, not overly complex academic words. Choose words that are naturally used in everyday professional communication.
-    - For coherence feedback: When identifying issues, provide SPECIFIC EXAMPLES from the transcript by quoting the exact phrases where the issue occurs.
-    - For general feedback: Be balanced - acknowledge strengths AND areas for improvement in each category.
+    You MUST provide a value for every key, including the numerical scores. For arrays, return all items you find; if none, return an empty array.
 
     Here is the required JSON structure. Follow it with 100% accuracy:
     {{
-        "positive_highlights": [
-            "<string: A specific, positive, and encouraging comment about something they did well.>"
-        ],
-        "grammar_feedback": "<string: A balanced overview of grammar performance - mention both strengths and areas needing work>",
+        "fluency_score": <integer from 0-100, based on your analysis of pace, rhythm and fillers>,
+        "fluency_feedback": "<string: Personalized comment on pace and rhythm.>",
+        "grammar_score": <integer from 0-100, based on the number and severity of errors>,
         "grammar_errors": [
-            {{
-                "error": "<string: The exact phrase with the ACTUAL grammar error>", 
-                "correction": "<string: The corrected phrase>", 
-                "explanation": "<string: A detailed explanation of why this is incorrect and what grammar concept is violated>"
-            }}
+            {{"error": "<string: Phrase with error>", "correction": "<string: Corrected phrase>", "explanation": "<string: Simple explanation>"}}
         ],
-        "vocabulary_feedback": "<string: A balanced overview of vocabulary usage - mention both effective word choices and opportunities for enhancement>",
-        "vocabulary_suggestions": [
-            {{
-                "original": "<string: A simple phrase from the transcript>",
-                "enhanced": "<string: The same phrase with SLIGHTLY more advanced vocabulary (not overly academic)>",
-                "explanation": "<string: Explanation of why the enhanced version is more effective>"
-            }}
+        "vocabulary_score": <integer from 0-100, based on your analysis of word choice>,
+        "vocabulary_feedback": "<string: Personalized comment on word choice. Suggest 1-2 better words.>",
+        "coherence_score": <integer from 0-100, based on the logical flow and structure>,
+        "coherence_feedback": "<string: Personalized comment on structure, MUST include a specific example from the transcript.>",
+        "argument_strength_analysis": "<string: Assess if the student supported their main points with reasons or examples. Provide a suggestion on how to make their argument more persuasive.>",
+        "structural_blueprint": "<string: Outline the structure of the student's speech (e.g., Opening -> Point 1 -> Point 2 -> Conclusion). Suggest a clearer blueprint if needed.>",
+        "positive_highlights": [
+            "<string: A specific, positive, and encouraging comment.>"
         ],
-        "coherence_feedback": "<string: A detailed analysis of the speech's organization and flow. When identifying problems, include SPECIFIC EXAMPLES like 'You jumped from talking about X to Y without transition at...' Include quotes from the transcript.>",
-        "fluency_feedback": "<string: A detailed analysis of speaking pace, rhythm, pauses, and flow. Include specific examples of where the student paused too long, spoke too fast/slow, or had good pacing.>",
         "rewritten_sample": "<string: Rewrite the user's ENTIRE speech into an improved version of a SIMILAR LENGTH at an appropriate, slightly more advanced level.>"
     }}
     """
@@ -404,49 +450,123 @@ async def login_for_access_token(
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+@app.get("/api/me/sessions")
+async def get_user_sessions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_session)]
+):
+    """
+    Fetches all practice sessions for the currently logged-in user.
+    """
+    try:
+        print(f"Fetching sessions for user: {current_user.id}")
+        user_with_sessions = session.get(User, current_user.id)
+        print(f"User found: {user_with_sessions}")
+        sessions = user_with_sessions.sessions if user_with_sessions else []
+        print(f"Number of sessions: {len(sessions)}")
+        
+        # Convert to dict to avoid Pydantic model issues
+        sessions_data = []
+        for s in sessions:
+            try:
+                session_dict = {
+                    "id": s.id,
+                    "topic": s.topic,
+                    "transcript": s.transcript,
+                    "feedback_json": s.feedback_json,
+                    "created_at": s.created_at,
+                    "student_id": s.student_id
+                }
+                sessions_data.append(session_dict)
+            except Exception as e:
+                print(f"Error processing session {s.id}: {e}")
+                continue
+        
+        print(f"Returning {len(sessions_data)} sessions")
+        return sessions_data
+    except Exception as e:
+        print(f"Error in get_user_sessions: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.post("/api/analyze")
-async def analyze_speech(mode: str = Query(...), audio_file: UploadFile = File(...), reference_text: str = Form(None), topic: str = Form(None)):
+async def analyze_speech(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    mode: str = Query(...),
+    audio_file: UploadFile = File(...),
+    reference_text: str = Form(None),
+    topic: str = Form(None)
+):
     audio_bytes = await audio_file.read()
     wav_data = convert_audio_with_ffmpeg(audio_bytes)
+
     if mode == 'pronunciation':
-        if not reference_text: raise HTTPException(status_code=400, detail="Reference text required.")
+        if not reference_text:
+            raise HTTPException(status_code=400, detail="Reference text required.")
+        
         azure_data = get_pronunciation_assessment(wav_data, reference_text)
-        return JSONResponse(content={"mode": "pronunciation", "azureAssessment": azure_data.get("NBest")[0]})
+        
+        if azure_data.get("RecognitionStatus") == "Success" and azure_data.get("NBest"):
+            detailed_result = azure_data["NBest"][0]
+            
+            if "PronScore" in detailed_result:
+                detailed_result["PronunciationScore"] = detailed_result["PronScore"]
+
+            if current_user:
+                # Save the session using the new standardized wrapper
+                db_session = DBSession(
+                    topic="Pronunciation Practice",
+                    transcript=detailed_result.get("Display"),
+                    feedback_json=json.dumps({"type": "pronunciation", "data": detailed_result}),
+                    student_id=current_user.id
+                )
+                session.add(db_session)
+                session.commit()
+
+            return JSONResponse(content={"mode": "pronunciation", "azureAssessment": detailed_result})
+        else:
+            error_detail = azure_data.get("DisplayText", "Azure API returned an unsuccessful status.")
+            raise HTTPException(status_code=502, detail=f"Pronunciation assessment failed: {error_detail}")
+
     elif mode == 'impromptu':
         if not topic: raise HTTPException(status_code=400, detail="Topic is required.")
         stt_result = get_stt_result(wav_data)
         transcript = stt_result.get("DisplayText", "")
         if not transcript: raise HTTPException(status_code=400, detail="Could not detect speech.")
+        
         nbest = stt_result.get("NBest", [{}])[0]
         duration_seconds = nbest.get("Duration", 0) / 10000000.0
         word_count = len(nbest.get("Words", []))
+        
         ai_coach_analysis = get_ai_coach_feedback(transcript, topic, duration_seconds, word_count)
+        
+        if current_user:
+            # Save the session using the new standardized wrapper
+            db_session = DBSession(
+                topic=topic,
+                transcript=transcript,
+                feedback_json=json.dumps({"type": "impromptu", "data": ai_coach_analysis}),
+                student_id=current_user.id
+            )
+            session.add(db_session)
+            session.commit()
+
         final_result = { "mode": "impromptu", "transcript": transcript, "azureMetrics": { "wordCount": word_count, "duration": duration_seconds }, "aiCoachAnalysis": ai_coach_analysis }
         return JSONResponse(content=final_result)
-    elif mode == 'impromptu_experimental':
-        # This new mode implements the dynamic reference text workflow
-        corrected_reference_text = generate_dynamic_reference_text(wav_data)
-        
-        # Now, use the corrected text to perform a standard pronunciation assessment
-        azure_data = get_pronunciation_assessment(wav_data, corrected_reference_text)
-        
-        # We add the generated text to the response so we can see it on the frontend
-        response_data = azure_data.get("NBest")[0]
-        response_data["GeneratedReferenceText"] = corrected_reference_text
-        
-        return JSONResponse(content={"mode": "pronunciation", "azureAssessment": response_data})
+    
     else:
         raise HTTPException(status_code=400, detail="Invalid analysis mode specified.")
 
 # UPDATED Text-to-Speech Endpoint for single words
 @app.get("/api/synthesize")
-async def synthesize_speech(word: str):
+async def synthesize_speech(
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    word: str = Query(...)
+):
     if not word: raise HTTPException(status_code=400, detail="No word provided.")
     
-    # Set the desired Indian English voice
     speech_config.speech_synthesis_voice_name = "en-IN-NeerjaNeural"
     
-    # Use default audio output configuration for streaming
     audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=True)
     synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
     result = synthesizer.speak_text_async(word).get()
@@ -461,14 +581,15 @@ class TextToSynthesize(BaseModel):
 
 # NEW Text-to-Speech Endpoint for paragraphs
 @app.post("/api/synthesize-paragraph")
-async def synthesize_paragraph(item: TextToSynthesize):
+async def synthesize_paragraph(
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    item: TextToSynthesize = None
+):
     if not item.text:
         raise HTTPException(status_code=400, detail="No text provided.")
     
-    # Set the desired Indian English voice
     speech_config.speech_synthesis_voice_name = "en-IN-NeerjaNeural"
     
-    # Use default audio output configuration for streaming
     audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=True)
     synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
     result = synthesizer.speak_text_async(item.text).get()
@@ -479,158 +600,97 @@ async def synthesize_paragraph(item: TextToSynthesize):
         raise HTTPException(status_code=500, detail=f"TTS Canceled: {result.cancellation_details.reason}")
 
 @app.post("/api/analyze-chunked")
-async def analyze_chunked_speech(audio_file: UploadFile = File(...), topic: str = Form(...)):
+async def analyze_chunked_speech(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    audio_file: UploadFile = File(...), 
+    topic: str = Form(...)
+):
+    """
+    Analyzes audio for a logged-in user or a guest.
+    Saves the session to the database ONLY if the user is logged in.
+    """
     audio_bytes = await audio_file.read()
-    
-    # ... (the temporary file and initial ffmpeg conversion logic remains the same)
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="The submitted audio file is empty.")
+
+    # We are keeping the core audio processing logic the same
     with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_in, \
          tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_out:
         temp_in.write(audio_bytes)
         temp_in_path = temp_in.name
         temp_out_path = temp_out.name
-
+    
     try:
-        # --- PART 1: GET THE TRANSCRIPT AND PRONUNCIATION ASSESSMENT ---
-        
-        # First, convert the whole file to a clean WAV
         convert_command = [ FFMPEG_PATH, '-i', temp_in_path, '-ac', '1', '-ar', '16000', temp_out_path, '-y' ]
         subprocess.run(convert_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Get audio duration to determine if we need chunking
         ffprobe_command = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', temp_out_path]
         duration_result = subprocess.run(ffprobe_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         duration_seconds = float(duration_result.stdout.strip().decode())
 
-        # Read full WAV data for pronunciation assessment later
-        with open(temp_out_path, 'rb') as f:
-            full_wav_data = f.read()
-
-        # Get transcript using chunked processing for long audio
         chunk_length_seconds = 45
         num_chunks = math.ceil(duration_seconds / chunk_length_seconds)
         
-        if num_chunks <= 1:
-            # Short audio - single STT call
-            print(f"Short audio ({duration_seconds:.1f}s) - using single STT call")
-            raw_stt_result = get_stt_result(full_wav_data)
-            raw_transcript = raw_stt_result.get("DisplayText", "")
-        else:
-            # Long audio - chunked parallel processing
-            print(f"Long audio ({duration_seconds:.1f}s) - using {num_chunks} chunks for transcription")
-            
-            tasks = []
-            for i in range(num_chunks):
-                start_time = i * chunk_length_seconds
-                print(f"Processing chunk {i+1}/{num_chunks} (start: {start_time}s)")
-                chunk_command = [ FFMPEG_PATH, '-i', temp_out_path, '-ss', str(start_time), '-t', str(chunk_length_seconds), '-f', 'wav', 'pipe:1' ]
-                try:
-                    process = subprocess.run(chunk_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                    wav_data = process.stdout
-                    if wav_data:
-                        print(f"Chunk {i+1} audio size: {len(wav_data)} bytes")
-                        tasks.append(process_chunk_async(wav_data))
-                    else:
-                        print(f"Warning: Chunk {i+1} has no audio data")
-                except subprocess.CalledProcessError as e:
-                    print(f"Error processing chunk {i+1}: {e.stderr.decode()}")
-                    raise HTTPException(status_code=500, detail=f"FFmpeg chunk processing failed: {e.stderr.decode()}")
+        tasks = []
+        for i in range(num_chunks):
+            start_time = i * chunk_length_seconds
+            chunk_command = [ FFMPEG_PATH, '-i', temp_out_path, '-ss', str(start_time), '-t', str(chunk_length_seconds), '-f', 'wav', 'pipe:1' ]
+            process = subprocess.run(chunk_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            wav_data = process.stdout
+            if wav_data:
+                tasks.append(process_chunk_async(wav_data))
 
-            if not tasks:
-                raise HTTPException(status_code=400, detail="No valid audio chunks were created")
-
-            print(f"Starting parallel processing of {len(tasks)} chunks...")
-            try:
-                # Process all chunks in parallel
-                chunk_results = await asyncio.gather(*tasks)
-                print(f"Completed parallel chunk processing. Got {len(chunk_results)} results.")
-            except Exception as e:
-                print(f"Error in parallel chunk processing: {str(e)}")
-                raise HTTPException(status_code=502, detail=f"Chunk processing failed: {str(e)}")
-            
-            # Stitch transcripts together
-            transcript_parts = []
-            for i, result in enumerate(chunk_results):
-                transcript_text = result.get("DisplayText", "") if result else ""
-                print(f"Chunk {i+1} transcript: '{transcript_text[:50]}{'...' if len(transcript_text) > 50 else ''}'")
-                transcript_parts.append(transcript_text)
-            
-            raw_transcript = " ".join(transcript_parts).strip()
-            print(f"Final stitched transcript length: {len(raw_transcript)} characters")
+        chunk_results = await asyncio.gather(*tasks)
         
-        if not raw_transcript:
+        full_transcript = ""
+        total_word_count = 0
+        for result in chunk_results:
+            full_transcript += result.get("DisplayText", "") + " "
+            total_word_count += len(result.get("NBest", [{}])[0].get("Words", []))
+
+        full_transcript = full_transcript.strip()
+        if not full_transcript:
             raise HTTPException(status_code=400, detail="Could not detect any speech in the audio.")
 
-        # Get the reference text for pronunciation assessment
-        if ENABLE_TEXT_CORRECTION:
-            print("Text correction enabled - using GPT-4 to clean transcript")
-            corrected_reference_text = correct_transcript_text(raw_transcript)
-        else:
-            print("Text correction disabled - using raw transcript as reference")
-            corrected_reference_text = raw_transcript
+        ai_coach_analysis = get_ai_coach_feedback(full_transcript, topic, duration_seconds, total_word_count)
         
-        # Calculate word count (duration already calculated above)
-        word_count = len(raw_transcript.split())
-        
-        # --- PART 2: RUN PRONUNCIATION AND AI COACH IN PARALLEL ---
-        
-        print("Starting parallel pronunciation and AI coach analysis...")
-        try:
-            # For pronunciation assessment, use only first 60 seconds of audio to avoid API limits
-            if duration_seconds > 60:
-                print(f"Audio is {duration_seconds:.1f}s, truncating to first 60s for pronunciation assessment")
-                # Create truncated audio for pronunciation
-                truncate_command = [FFMPEG_PATH, '-i', temp_out_path, '-t', '60', '-f', 'wav', 'pipe:1']
-                truncate_process = subprocess.run(truncate_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-                pronunciation_audio = truncate_process.stdout
-                
-                # Also truncate the reference text to match the audio duration
-                words_per_second = len(raw_transcript.split()) / duration_seconds
-                estimated_words_60s = int(words_per_second * 60)
-                truncated_reference = " ".join(raw_transcript.split()[:estimated_words_60s])
-                print(f"Truncated reference text from {len(raw_transcript)} to {len(truncated_reference)} characters")
-            else:
-                pronunciation_audio = full_wav_data
-                truncated_reference = corrected_reference_text
-            
-            # Create tasks for parallel execution
-            pron_task = asyncio.create_task(
-                asyncio.to_thread(get_pronunciation_assessment, pronunciation_audio, truncated_reference)
+        # --- MODIFIED DATABASE SAVING LOGIC ---
+        if current_user:
+            # Save the session using the standardized {"type": "...", "data": ...} wrapper
+            db_session = DBSession(
+                topic=topic,
+                transcript=full_transcript,
+                feedback_json=json.dumps({"type": "impromptu", "data": ai_coach_analysis}),
+                student_id=current_user.id
             )
-            coach_task = asyncio.create_task(
-                asyncio.to_thread(get_ai_coach_feedback, raw_transcript, topic, duration_seconds, word_count)
-            )
-            
-            # Wait for both to complete
-            pronunciation_data, ai_coach_analysis = await asyncio.gather(pron_task, coach_task)
-            print("Completed parallel pronunciation and AI coach analysis")
-        except Exception as e:
-            print(f"Error in parallel final analysis: {str(e)}")
-            raise HTTPException(status_code=502, detail=f"Final analysis failed: {str(e)}")
-        
-        # Add reference text info to response
-        if ENABLE_TEXT_CORRECTION:
-            pronunciation_data["GeneratedReferenceText"] = corrected_reference_text
-        else:
-            pronunciation_data["GeneratedReferenceText"] = f"Text correction disabled. Using original transcript: {raw_transcript}"
-        
-        # --- PART 3: COMBINE AND RETURN ---
+            session.add(db_session)
+            try:
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                print(f"DATABASE SAVE FAILED for user {current_user.id}: {e}")
+        # --- END MODIFIED LOGIC ---
+
         final_result = {
-            "mode": "impromptu-combined",
-            "transcript": raw_transcript,
-            "pronunciationAssessment": pronunciation_data.get("NBest")[0],
+            "mode": "impromptu-chunked",
+            "transcript": full_transcript,
+            "azureMetrics": {"wordCount": total_word_count, "duration": duration_seconds},
             "aiCoachAnalysis": ai_coach_analysis
         }
         return JSONResponse(content=final_result)
 
     finally:
-        # Clean up BOTH temporary files
         os.remove(temp_in_path)
         os.remove(temp_out_path)
 
 # --- NEW: BATCH ANALYSIS ENDPOINT WITH ENHANCED LOGGING ---
 @app.post("/api/analyze-batch/start")
-async def start_batch_analysis(audio_file: UploadFile = File(...)):
+async def start_batch_analysis(
+    current_user: Annotated[User, Depends(get_current_user)],
+    audio_file: UploadFile = File(...)
+):
     """Starts a batch transcription job for a long audio file."""
+    # ... the rest of the function remains unchanged
     wav_data = convert_audio_with_ffmpeg(await audio_file.read())
     audio_url = await upload_audio_to_blob(wav_data)
 
@@ -646,7 +706,6 @@ async def start_batch_analysis(audio_file: UploadFile = File(...)):
     
     response = requests.post(batch_transcription_endpoint, headers=headers, json=payload)
     
-    # ENHANCED LOGGING: We will now see the exact error from Azure
     if response.status_code != 201:
         print("\n" + "#"*50)
         print("### AZURE BATCH API FAILED TO START JOB ###")
@@ -661,8 +720,12 @@ async def start_batch_analysis(audio_file: UploadFile = File(...)):
     return {"jobId": job_id}
 
 @app.get("/api/analyze-batch/status")
-async def get_batch_status(job_id: str):
+async def get_batch_status(
+    current_user: Annotated[User, Depends(get_current_user)],
+    job_id: str
+):
     """Polls the status of an ongoing batch transcription job."""
+    # ... the rest of the function remains unchanged
     status_endpoint = f"https://{AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/speechtotext/v3.1/transcriptions/{job_id}"
     headers = {'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY}
     response = requests.get(status_endpoint, headers=headers)
@@ -670,8 +733,13 @@ async def get_batch_status(job_id: str):
     return response.json()
 
 @app.get("/api/analyze-batch/results")
-async def get_batch_results(job_id: str, topic: str):
+async def get_batch_results(
+    current_user: Annotated[User, Depends(get_current_user)],
+    job_id: str, 
+    topic: str
+):
     """Fetches the final results of a completed batch job and analyzes them."""
+    # ... the rest of the function remains unchanged
     results_endpoint = f"https://{AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/speechtotext/v3.1/transcriptions/{job_id}/files"
     headers = {'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY}
     response = requests.get(results_endpoint, headers=headers)
@@ -684,14 +752,11 @@ async def get_batch_results(job_id: str, topic: str):
     result_file_url = files[0]["links"]["contentUrl"]
     result_content = requests.get(result_file_url).json()
     
-    # --- THIS IS THE FIX ---
-    # The batch API result uses the "display" key for the transcript, not "lexical".
     transcript_phrases = []
     for phrase in result_content.get("recognizedPhrases", []):
         transcript_phrases.append(phrase.get("display", ""))
     transcript = " ".join(transcript_phrases)
     
-    # The rest of the function remains the same
     duration_seconds = sum([phrase.get("durationInTicks", 0) for phrase in result_content.get("recognizedPhrases", [])]) / 10000000.0
     word_count = len(transcript.split())
     
@@ -706,7 +771,11 @@ async def get_batch_results(job_id: str, topic: str):
     return JSONResponse(content=final_result)
 
 @app.post("/api/analyze-ab-test")
-async def analyze_ab_test(audio_file: UploadFile = File(...), topic: str = Form("General Speaking")):
+async def analyze_ab_test(
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    audio_file: UploadFile = File(...), 
+    topic: str = Form("General Speaking")
+):
     """
     Runs a comprehensive A/B test by getting transcripts from both Azure and Whisper,
     then running pronunciation assessments and AI coach analysis on both.

@@ -17,15 +17,25 @@ const EncouragementCard = ({ title, feedback, icon }) => {
 };
 
 const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
+  // Add this safety check at the top of the component
+  if (!results || !results.aiCoachAnalysis) {
+    return (
+      <div className="impromptu-dashboard">
+        <h2>Error</h2>
+        <p>Could not load the analysis for this session. The data might be missing or corrupted.</p>
+      </div>
+    );
+  }
+
   const { aiCoachAnalysis, transcript } = results;
   const [showAllGrammar, setShowAllGrammar] = useState(false);
   const [showAllVocab, setShowAllVocab] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [activeTab, setActiveTab] = useState('coach');
 
-  const grammarErrors = aiCoachAnalysis.grammar_errors || [];
-  const vocabularySuggestions = aiCoachAnalysis.vocabulary_suggestions || [];
-  const positiveHighlights = aiCoachAnalysis.positive_highlights || [];
+  const grammarErrors = aiCoachAnalysis?.grammar_errors || [];
+  const vocabularySuggestions = aiCoachAnalysis?.vocabulary_suggestions || [];
+  const positiveHighlights = aiCoachAnalysis?.positive_highlights || [];
 
   const playSampleAudio = async () => {
     if (isAudioPlaying) return;

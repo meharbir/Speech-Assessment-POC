@@ -21,7 +21,7 @@ const WordPopup = ({ wordData, onClose }) => {
         <button className="popup-close" onClick={onClose}>&times;</button>
         <h3>Word Details: "{wordData.Word}"</h3>
         <p><strong>Accuracy Score:</strong> {wordData.AccuracyScore}%</p>
-        <p><strong>Error Type:</strong> {wordData.ErrorType}</p>
+        <p><strong>Error Type:</strong> {wordData.ErrorType || (wordData.AccuracyScore > 75 ? 'None' : 'Mispronunciation')}</p>
         
         {wordData.Phonemes && wordData.Phonemes.length > 0 && (
           <>

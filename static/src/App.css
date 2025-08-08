@@ -75,16 +75,17 @@ button:disabled {
 }
 
 .back-button {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  background: none;
-  border: 1px solid white;
-  color: white;
-  padding: 8px 15px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 0.9em;
+    position: absolute;
+    left: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: 1px solid white;
+    color: white;
+    padding: 8px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
 }
 
 .back-button:hover {
@@ -106,4 +107,49 @@ button:disabled {
 
 .logout-button:hover {
   background-color: #e74c3c;
+}
+
+.guest-indicator {
+    color: #f1c40f; /* A yellow/gold color */
+    font-weight: bold;
+    margin-right: 15px;
+    align-self: center;
+}
+
+.header-nav {
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.nav-button {
+    background: none;
+    border: 1px solid white;
+    color: white;
+    padding: 8px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.nav-button:hover:not(:disabled) {
+    background-color: rgba(255,255,255,0.1);
+}
+.nav-button:disabled {
+    background-color: #3498db;
+    border-color: #3498db;
+    cursor: not-allowed;
+}
+.logout-button {
+    position: static;
+    transform: none;
+    top: auto;
+    right: auto;
+}
+.guest-indicator {
+    color: #f1c40f;
+    font-weight: bold;
+    margin-right: 15px;
+    align-self: center;
 }

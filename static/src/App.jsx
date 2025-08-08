@@ -8,11 +8,15 @@ import BatchPractice from './components/BatchPractice';
 import ChunkedImpromptuPractice from './components/ChunkedImpromptuPractice';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import MyProgressPage from './pages/MyProgressPage';
 
 function App() {
   const [mode, setMode] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('user_token'));
   const [showLogin, setShowLogin] = useState(true);
+  // Add this line with the other useState hooks
+  const [isGuest, setIsGuest] = useState(false);
+  const [view, setView] = useState('practice'); // 'practice' or 'progress'
 
   // Effect to update axios headers when token changes
   useEffect(() => {
@@ -38,12 +42,23 @@ function App() {
       alert('Signup successful! Please log in.');
   };
 
-  // If no token, show the auth pages
-  if (!token) {
+  // If no token and not a guest, show the auth pages
+  if (!token && !isGuest) {
     if (showLogin) {
-      return <LoginPage onLoginSuccess={handleLoginSuccess} onSwitchToSignup={() => setShowLogin(false)} />;
+      return (
+        <LoginPage
+          onLoginSuccess={handleLoginSuccess}
+          onSwitchToSignup={() => setShowLogin(false)}
+          onContinueAsGuest={() => setIsGuest(true)}
+        />
+      );
     } else {
-      return <SignupPage onSignupSuccess={handleSignupSuccess} onSwitchToLogin={() => setShowLogin(true)} />;
+      return (
+        <SignupPage
+          onSignupSuccess={handleSignupSuccess}
+          onSwitchToLogin={() => setShowLogin(true)}
+        />
+      );
     }
   }
 
@@ -60,15 +75,33 @@ function App() {
     <div className="App">
       <header className="App-header">
         <h1>AI Speech Assessment</h1>
-        {mode && (
-          <button className="back-button" onClick={() => setMode(null)}>
-            &larr; Change Mode
-          </button>
+        {view === 'practice' && mode && (
+            <button className="back-button" onClick={() => setMode(null)}>
+                &larr; Change Mode
+            </button>
         )}
-        <button className="logout-button" onClick={handleLogout}>Logout</button>
+        {view === 'progress' && (
+             <button className="back-button" onClick={() => setView('practice')}>
+                &larr; Back to Practice
+            </button>
+        )}
+        <div className="header-nav">
+            {isGuest && <span className="guest-indicator">Guest Mode</span>}
+            <button className="nav-button" onClick={() => setView('practice')} disabled={view === 'practice'}>
+                Practice
+            </button>
+            {!isGuest && (
+                <button className="nav-button" onClick={() => setView('progress')} disabled={view === 'progress'}>
+                    My Progress
+                </button>
+            )}
+            <button className="logout-button" onClick={isGuest ? () => setIsGuest(false) : handleLogout}>
+                {isGuest ? 'Exit Guest Mode' : 'Logout'}
+            </button>
+        </div>
       </header>
       <main>
-        {renderContent()}
+        {view === 'practice' ? renderContent() : <MyProgressPage />}
       </main>
     </div>
   );

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import axios from 'axios';
-import ResultsDashboard from './ResultsDashboard';
+import PronunciationView from './PronunciationView';
 import './Practice.css'; // We will create this next
 
 const PronunciationPractice = () => {
@@ -41,6 +41,8 @@ const PronunciationPractice = () => {
 
     try {
       const response = await axios.post('http://localhost:8000/api/analyze?mode=pronunciation', formData);
+      
+      
       setResults(response.data);
     } catch (error) {
       console.error("Error sending audio to backend:", error);
@@ -51,16 +53,8 @@ const PronunciationPractice = () => {
   };
 
   if (results) {
-    // Transform the new backend response format to match what ResultsDashboard expects
-    const transformedResults = {
-      azureAssessment: results.azureAssessment,
-      logicalFlowAnalysis: results.logicalFlowAnalysis || {
-        coherence_feedback: "Analysis not available in pronunciation mode.",
-        rephrasing_suggestions: [],
-        ending_recommendation: ""
-      }
-    };
-    return <ResultsDashboard results={transformedResults} />;
+    // For pronunciation practice, show only pronunciation results
+    return <PronunciationView pronunciationData={results.azureAssessment} />;
   }
 
   return (

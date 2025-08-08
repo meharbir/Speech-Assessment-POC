@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import './Auth.css'; // Import the CSS
 
-const LoginPage = ({ onLoginSuccess, onSwitchToSignup }) => {
+const LoginPage = ({ onLoginSuccess, onSwitchToSignup, onContinueAsGuest }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -43,6 +43,10 @@ const LoginPage = ({ onLoginSuccess, onSwitchToSignup }) => {
                 <p>
                     Don't have an account?{' '}
                     <button onClick={onSwitchToSignup}>Sign Up</button>
+                </p>
+                <p>
+                    Or{' '}
+                    <button onClick={onContinueAsGuest}>Continue as Guest</button>
                 </p>
             </div>
         </div>

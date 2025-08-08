@@ -5,6 +5,7 @@ import './components.css';
 const PronunciationView = ({ pronunciationData }) => {
   const [selectedWord, setSelectedWord] = useState(null);
 
+
   if (!pronunciationData) return <div>Loading...</div>;
 
   return (
