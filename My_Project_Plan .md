@@ -84,6 +84,38 @@ Outcome of Phase 4: The MVP is complete. The product is now a powerful, data-dri
 
 
 
+STEP 5:
+Add back pronounuciation assessment next to IMpromptu. They removed the tab. 
 
+POST MVP FEATURES TO LOOK INTO: 
+-------------
+(THe whole of this blue line boudnary para)
+Post-MVP Task: Secure Batch Processing Jobs & Implement Ownership
+What is this?
+This task involves creating a clear link between a user and the long-running "batch processing" jobs they start.
+
+Problem to Solve (The "Why"):
+Currently, the batch analysis endpoints (/api/analyze-batch/...) are protected by a general login, but they don't check who started a specific job. This creates a minor security risk where one logged-in user could potentially guess the job_id of another user's job and access its status or results.
+
+Action Plan (The "How-To"):
+
+Update Database (models.py):
+
+Create a new BatchJob table in the database.
+
+This table will have two main fields: the job_id (from Azure) and the user_id of the person who started it.
+
+Add a relationship from the User table to the new BatchJob table.
+
+Update Backend (main.py):
+
+Modify the /api/analyze-batch/start endpoint. When a new job is successfully started, save a record of the job_id and the current_user.id into our new BatchJob table.
+
+Modify the /api/analyze-batch/status and /api/analyze-batch/results endpoints. Before fetching any information from Azure, first check our BatchJob table to ensure the current_user.id matches the user who originally created that job_id. If it doesn't match, return a "Not Found" or "Access Denied" error.
+-----------------------------------
 
 V2: 
+
+
+Features that could be considered: 
+Should the teacher also see a timer showing how long a student has been "in progress"? This could help them identify students who might be stuck or taking a very long time.

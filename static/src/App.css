@@ -153,3 +153,21 @@ button:disabled {
     margin-right: 15px;
     align-self: center;
 }
+
+.ws-status-indicator {
+    padding: 5px 10px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+    margin-right: 10px;
+    color: white;
+}
+.ws-status-connected {
+    background-color: #27ae60; /* Green */
+}
+.ws-status-connecting, .ws-status-reconnecting {
+    background-color: #f39c12; /* Orange */
+}
+.ws-status-disconnected {
+    background-color: #c0392b; /* Red */
+}

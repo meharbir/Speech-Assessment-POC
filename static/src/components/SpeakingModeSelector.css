@@ -45,3 +45,45 @@
   font-weight: bold;
   color: #3498db;
 }
+
+.join-class-banner {
+    background-color: #fff3cd;
+    border: 1px solid #ffeeba;
+    color: #856404;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 30px;
+    text-align: center;
+}
+.join-class-form {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 15px;
+}
+.join-class-form input {
+    padding: 10px;
+    font-size: 1em;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    width: 200px;
+}
+.join-class-form button {
+    padding: 10px 20px;
+    font-size: 1em;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.join-class-error {
+    color: #c0392b;
+    font-weight: bold;
+    margin-top: 10px;
+}
+.join-class-success {
+    color: #27ae60;
+    font-weight: bold;
+    margin-top: 10px;
+}

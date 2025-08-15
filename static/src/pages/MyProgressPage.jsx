@@ -55,7 +55,7 @@ const SessionScores = ({ feedback }) => {
     return null;
 };
 
-const MyProgressPage = () => {
+export const MyProgressPage = ({ userId }) => { // Add export and userId prop
     const [sessions, setSessions] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -63,8 +63,14 @@ const MyProgressPage = () => {
 
     useEffect(() => {
         const fetchSessions = async () => {
+            // If a userId is provided, we are a teacher viewing a student.
+            // Otherwise, we are a student viewing their own progress.
+            const url = userId 
+                ? `http://localhost:8000/api/teacher/student/${userId}/sessions`
+                : 'http://localhost:8000/api/me/sessions';
+            
             try {
-                const response = await axios.get('http://localhost:8000/api/me/sessions');
+                const response = await axios.get(url);
                 const parsedSessions = response.data.map(session => {
                     try {
                         // This correctly parses the {"type": "...", "data": ...} structure
@@ -84,7 +90,7 @@ const MyProgressPage = () => {
             }
         };
         fetchSessions();
-    }, []);
+    }, [userId]); // The effect now depends on userId
 
     // RENDER THE DETAILED VIEW
     if (selectedSession) {

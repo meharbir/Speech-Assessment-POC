@@ -1,6 +1,8 @@
 import os
 import json
 import uuid
+import logging
+import socket
 import subprocess
 import io
 import base64
@@ -8,8 +10,9 @@ import requests
 import math
 import tempfile
 import asyncio
+import secrets
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +22,7 @@ import azure.cognitiveservices.speech as speechsdk
 from azure.storage.blob.aio import BlobServiceClient
 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 from datetime import datetime, timedelta
-from sqlmodel import create_engine, SQLModel
+from sqlmodel import create_engine, SQLModel, select
 
 # --- NEW IMPORTS FOR AUTH ---
 from fastapi import Depends, HTTPException, status
@@ -27,12 +30,12 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HT
 from fastapi import Request
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlmodel import Session, create_engine, select, SQLModel
+from sqlmodel import Session, create_engine, SQLModel
 from typing import Annotated, List
 from datetime import datetime, timedelta, timezone
 # --- END NEW IMPORTS ---
 
-from models import User, Session as DBSession, Topic # Renamed to avoid conflict
+from models import User, Session as DBSession, Topic, Class # Renamed to avoid conflict
 
 # --- CONFIGURATION & INITIALIZATION ---
 load_dotenv()
@@ -40,15 +43,45 @@ app = FastAPI()
 
 # --- DATABASE CONNECTION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
+print(f"🔍 DEBUG: DATABASE_URL loaded: {DATABASE_URL}")
+print(f"🔍 DEBUG: DATABASE_URL length: {len(DATABASE_URL) if DATABASE_URL else 'None'}")
+
+# Test DNS resolution
+try:
+    hostname = "db.nfrgfkmvhocucfkoimku.supabase.co"
+    print(f"🔍 DEBUG: Testing DNS resolution for {hostname}")
+    ip = socket.gethostbyname(hostname)
+    print(f"✅ DEBUG: DNS resolved to IP: {ip}")
+except Exception as e:
+    print(f"❌ DEBUG: DNS resolution failed: {e}")
+
 engine = create_engine(DATABASE_URL, echo=True)
+print(f"🔍 DEBUG: SQLAlchemy engine created successfully")
 
 def create_db_and_tables():
-    SQLModel.metadata.create_all(engine)
+    print("🔍 DEBUG: Starting create_db_and_tables()")
+    try:
+        print("🔍 DEBUG: About to call SQLModel.metadata.create_all(engine)")
+        SQLModel.metadata.create_all(engine)
+        print("✅ DEBUG: Database tables created successfully!")
+    except Exception as e:
+        print(f"❌ DEBUG: Database table creation failed: {e}")
+        raise
+
+async def run_ping_task():
+    """Periodically sends a ping to all connected WebSocket clients."""
+    while True:
+        await asyncio.sleep(20) # Send a ping every 20 seconds
+        await manager.send_ping()
 
 # Connect to the database and create tables on startup
 @app.on_event("startup")
 def on_startup():
+    print("🔍 DEBUG: FastAPI startup event triggered")
     create_db_and_tables()
+    # Start the ping task as a background task
+    asyncio.create_task(run_ping_task())
+    print("✅ DEBUG: Startup completed successfully and ping task started")
 
 # --- SECURITY CONFIGURATION ---
 SECRET_KEY = os.getenv("SECRET_KEY", "a_super_secret_dev_key_change_this") # CHANGE IN PRODUCTION
@@ -69,6 +102,54 @@ def verify_password(plain_password, hashed_password):
 
 def get_password_hash(password):
     return pwd_context.hash(password)
+
+def generate_class_code():
+    """Generates a simple, shareable 6-character class code."""
+    return f"{secrets.token_hex(3).upper()}"
+
+# --- WEBSOCKET CONNECTION MANAGER ---
+# --- ENHANCED WEBSOCKET CONNECTION MANAGER ---
+class ConnectionManager:
+    def __init__(self):
+        # We now store websockets in a more structured way
+        self.active_connections: dict[int, dict[str, list[WebSocket]]] = {}
+
+    async def connect(self, websocket: WebSocket, class_id: int, user: User):
+        await websocket.accept()
+        if class_id not in self.active_connections:
+            self.active_connections[class_id] = {"teacher": [], "student": []}
+        
+        # Add the connection to the appropriate list based on role
+        self.active_connections[class_id][user.role].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, class_id: int, user: User):
+        if class_id in self.active_connections:
+            self.active_connections[class_id][user.role].remove(websocket)
+
+    async def send_to_teacher(self, message: str, class_id: int):
+        # Now we send specifically to the teacher's connection
+        if class_id in self.active_connections:
+            for connection in self.active_connections[class_id]["teacher"]:
+                await connection.send_text(message)
+    
+    async def broadcast_to_class(self, message: str, class_id: int):
+        # Now we can broadcast to just students
+        if class_id in self.active_connections:
+            for connection in self.active_connections[class_id]["student"]:
+                await connection.send_text(message)
+
+    async def send_ping(self):
+        for class_id, role_connections in self.active_connections.items():
+            for role, connections in role_connections.items():
+                for connection in connections:
+                    try:
+                        await connection.send_text('{"type": "ping"}')
+                    except Exception:
+                        # If sending fails, the connection is likely dead.
+                        # The main receive loop will handle the disconnect.
+                        pass
+
+manager = ConnectionManager()
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
@@ -355,6 +436,46 @@ def get_ai_coach_feedback(transcript: str, topic: str, duration_seconds: float, 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI API Error: {str(e)}")
 
+def get_ai_class_summary(session_data: list, topic: str) -> dict:
+    """
+    Analyzes a list of session feedback data to generate a class-wide summary.
+    """
+    if not openai_client:
+        return {"error": "OpenAI client not configured."}
+
+    # Aggregate all the feedback into a single structure for the AI
+    aggregated_feedback = json.dumps(session_data, indent=2)
+
+    prompt = f"""
+    You are an expert educational analyst. Your task is to analyze the collected AI feedback from an entire class for a single speaking session on the topic "{topic}".
+    The data provided is a JSON array of individual student feedback objects.
+
+    Here is the aggregated data:
+    {aggregated_feedback}
+
+    Based on this data, your task is to identify the most significant, common patterns. Provide your analysis in a valid JSON object with the following structure:
+
+    {{
+        "strengths": [
+            "<string: Identify the most prominent shared strength. Be specific, e.g., 'Many students effectively used descriptive vocabulary.'>"
+        ],
+        "weaknesses": [
+            "<string: Identify the most common shared weakness. Be specific and provide an example, e.g., 'A common grammatical error was subject-verb agreement, such as using `he go` instead of `he goes`.'>"
+        ]
+    }}
+    
+    Focus only on the most impactful, class-wide trends for grammar and vocabulary. Provide one key strength and one key weakness.
+    """
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI API Error during summary: {str(e)}")
+
 def get_whisper_transcript(wav_data: bytes) -> str:
     """Sends audio to OpenAI's Whisper API and returns the transcript."""
     if not openai_client:
@@ -411,21 +532,47 @@ async def upload_audio_to_blob(audio_bytes: bytes) -> str:
 # --- API ENDPOINTS ---
 
 @app.post("/users/signup", response_model=User)
-def create_user(user: User, session: Annotated[Session, Depends(get_session)]):
+def create_user(
+    user: User, 
+    session: Annotated[Session, Depends(get_session)],
+    class_code: str = Query(None)
+):
     db_user = session.exec(select(User).where(User.email == user.email)).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    class_id = None
+    if user.role == 'student':
+        if not class_code:
+            raise HTTPException(status_code=400, detail="Students must provide a class code.")
+        
+        # Ensure class_code is uppercase for consistent matching
+        target_class = session.exec(select(Class).where(Class.class_code == class_code.upper())).first()
+        if not target_class:
+            raise HTTPException(status_code=404, detail="Invalid Class Code.")
+        class_id = target_class.id
     
+    # Teachers do not need a class_code to sign up
+    elif user.role != 'teacher':
+        raise HTTPException(status_code=400, detail="Invalid user role specified.")
+
     hashed_password = get_password_hash(user.hashed_password)
     db_user = User(
         email=user.email,
         full_name=user.full_name,
         hashed_password=hashed_password,
-        role=user.role
+        role=user.role,
+        class_id=class_id
     )
     session.add(db_user)
-    session.commit()
-    session.refresh(db_user)
+    
+    try:
+        session.commit()
+        session.refresh(db_user)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        
     return db_user
 
 class Token(SQLModel):
@@ -449,6 +596,188 @@ async def login_for_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/api/users/me", response_model=User)
+async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
+    """
+    Fetch the currently authenticated user.
+    """
+    return current_user
+
+class ClassCreate(BaseModel):
+    name: str
+
+class TopicBroadcast(BaseModel):
+    mode: str
+    text: str
+
+class JoinClassRequest(BaseModel):
+    class_code: str
+
+@app.post("/api/teacher/classes", response_model=Class)
+async def create_class(
+    class_data: ClassCreate,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Allows a logged-in teacher to create a new class."""
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="Only teachers can create classes.")
+    
+    new_class = Class(
+        name=class_data.name,
+        class_code=generate_class_code(),
+        teacher_id=current_user.id
+    )
+    session.add(new_class)
+    session.commit()
+    session.refresh(new_class)
+    return new_class
+
+@app.post("/api/teacher/class/topic")
+async def broadcast_topic(
+    topic_data: TopicBroadcast,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="Only teachers can broadcast topics.")
+    
+    teacher_class = session.exec(select(Class).where(Class.teacher_id == current_user.id)).first()
+    if not teacher_class:
+        raise HTTPException(status_code=404, detail="Teacher has not created a class yet.")
+        
+    message = {
+        "type": "new_topic",
+        "payload": {
+            "mode": topic_data.mode,
+            "text": topic_data.text
+        }
+    }
+    
+    await manager.broadcast_to_class(json.dumps(message), teacher_class.id)
+    return {"status": "Topic broadcasted successfully"}
+
+@app.get("/api/teacher/my-class", response_model=Class)
+async def get_teacher_class(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Fetches the class taught by the currently logged-in teacher."""
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="User is not a teacher.")
+    
+    teacher_class = session.exec(select(Class).where(Class.teacher_id == current_user.id)).first()
+    
+    if not teacher_class:
+        raise HTTPException(status_code=404, detail="Teacher has not created a class yet.")
+        
+    return teacher_class
+
+@app.get("/api/teacher/students")
+async def get_teacher_students(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Fetches all students in the teacher's class."""
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="User is not a teacher.")
+    
+    teacher_class = session.exec(select(Class).where(Class.teacher_id == current_user.id)).first()
+    
+    if not teacher_class:
+        raise HTTPException(status_code=404, detail="Teacher has not created a class yet.")
+    
+    students = session.exec(select(User).where(User.class_id == teacher_class.id, User.role == 'student')).all()
+    
+    return [{"id": student.id, "full_name": student.full_name, "email": student.email} for student in students]
+
+@app.get("/api/teacher/student/{student_id}/sessions", response_model=List[DBSession])
+async def get_student_sessions_for_teacher(
+    student_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Fetches all practice sessions for a specific student,
+    ensuring the requesting user is that student's teacher.
+    """
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="Only teachers can view student sessions.")
+
+    # Find the student and verify they exist
+    student = session.get(User, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    # Security Check: Verify the student is in the current teacher's class
+    if not student.student_class or student.student_class.teacher_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied: Student is not in your class.")
+        
+    return student.sessions
+
+class ClassSummaryRequest(BaseModel):
+    topic: str
+
+@app.post("/api/teacher/class/summary", response_model=dict)
+async def get_class_summary(
+    summary_request: ClassSummaryRequest,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Generates an AI-powered summary of class performance for a specific topic.
+    """
+    if current_user.role != 'teacher':
+        raise HTTPException(status_code=403, detail="Only teachers can generate summaries.")
+    
+    teacher_class = session.exec(select(Class).where(Class.teacher_id == current_user.id)).first()
+    if not teacher_class:
+        raise HTTPException(status_code=404, detail="Teacher has no class.")
+
+    # Find all sessions for this topic from students in the teacher's class
+    student_ids = [student.id for student in teacher_class.students]
+    relevant_sessions = session.exec(
+        select(DBSession)
+        .where(DBSession.student_id.in_(student_ids))
+        .where(DBSession.topic == summary_request.topic)
+    ).all()
+
+    if not relevant_sessions:
+        raise HTTPException(status_code=404, detail="No student sessions found for this topic.")
+
+    # Extract just the feedback data for analysis
+    feedback_data = [json.loads(s.feedback_json)["data"] for s in relevant_sessions if s.feedback_json]
+    
+    summary = get_ai_class_summary(feedback_data, summary_request.topic)
+    return summary
+
+@app.patch("/api/student/join-class", response_model=User)
+async def join_class(
+    join_request: JoinClassRequest,
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Allows a logged-in student to join a class using a class code."""
+    if current_user.role != 'student':
+        raise HTTPException(status_code=403, detail="Only students can join a class.")
+    
+    if current_user.class_id:
+        raise HTTPException(status_code=400, detail="Student is already in a class.")
+
+    class_code = join_request.class_code.upper()
+    target_class = session.exec(select(Class).where(Class.class_code == class_code)).first()
+
+    if not target_class:
+        raise HTTPException(status_code=404, detail="Invalid Class Code.")
+
+    # Update the user's class_id
+    current_user.class_id = target_class.id
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
+    return current_user
 
 @app.get("/api/me/sessions")
 async def get_user_sessions(
@@ -824,6 +1153,70 @@ async def analyze_ab_test(
         }
     }
     return JSONResponse(content=final_result)
+
+@app.websocket("/ws/{class_id}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    class_id: int,
+    token: str = Query(...),
+    session: Session = Depends(get_session) # Get a DB session
+):
+    """
+    Handles WebSocket connections for a specific class.
+    Authenticates the user via a JWT token passed as a query parameter.
+    """
+    try:
+        # Use a simplified version of get_current_user to validate the token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            await websocket.close(code=1008)
+            return
+        
+        user = session.exec(select(User).where(User.email == email)).first()
+        if not user or user.class_id != class_id:
+            # User is not found or does not belong to this class
+            await websocket.close(code=1008)
+            return
+            
+    except JWTError:
+        # Token is invalid
+        await websocket.close(code=1008)
+        return
+
+    # If authentication is successful, connect the user with their role
+    await manager.connect(websocket, class_id, user)
+    print(f"User {user.full_name} (Role: {user.role}) connected to class {class_id}")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            # If a student sends a status update, relay it to the teacher.
+            if message.get("type") == "status_update":
+                update_message = {
+                    "type": "student_status_update",
+                    "payload": {
+                        "student_id": user.id,
+                        "student_name": user.full_name,
+                        "status": message.get("status")
+                    }
+                }
+                await manager.send_to_teacher(json.dumps(update_message), class_id)
+
+            # Keep the pong response for our heartbeat
+            elif message.get("type") == "pong":
+                pass
+    except WebSocketDisconnect:
+        # On disconnect, send a final status update and then disconnect
+        disconnect_message = {
+            "type": "student_status_update",
+            "payload": { "student_id": user.id, "student_name": user.full_name, "status": "disconnected" }
+        }
+        await manager.send_to_teacher(json.dumps(disconnect_message), class_id)
+        
+        manager.disconnect(websocket, class_id, user)
+        print(f"User {user.full_name} disconnected from class {class_id}")
 
 # --- THIS MUST BE THE LAST ROUTE DEFINITION ---
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

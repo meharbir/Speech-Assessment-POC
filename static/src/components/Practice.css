@@ -69,3 +69,32 @@
 .error-message button:hover {
     background-color: #c82333;
 }
+
+.assigned-text-indicator {
+    background-color: #e8f4fd;
+    border: 2px solid #3498db;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #2c3e50;
+    font-size: 1em;
+    text-align: center;
+}
+
+.assigned-text-indicator strong {
+    color: #2980b9;
+}
+
+.task-complete-button {
+    display: block;
+    width: fit-content;
+    margin: 0 auto 20px;
+    padding: 12px 25px;
+    font-size: 1.1em;
+    font-weight: bold;
+    background-color: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
