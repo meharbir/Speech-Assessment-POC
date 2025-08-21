@@ -146,6 +146,9 @@ const TeacherDashboard = ({ studentStatuses, sendMessage }) => {
                             {copyButtonText}
                         </button>
                     </div>
+                    <p className="rubric-note">
+                        Note: All AI feedback is aligned with the official CBSE ASL Grade XI-XII curriculum.
+                    </p>
                 </div>
             ) : (
                 <div className="create-class-card">
@@ -222,6 +225,7 @@ const TeacherDashboard = ({ studentStatuses, sendMessage }) => {
                     <div className="student-grid">
                         {students.map(student => {
                             const status = studentStatuses[student.id] || 'waiting';
+                            const displayStatus = status.charAt(0).toUpperCase() + status.slice(1);
                             return (
                                 <div 
                                     key={student.id} 
@@ -229,7 +233,7 @@ const TeacherDashboard = ({ studentStatuses, sendMessage }) => {
                                     onClick={() => setViewingStudent(student)}
                                 >
                                     <p className="student-name">{student.full_name}</p>
-                                    <p className="student-status">{studentStatuses[student.id] || 'Waiting'}</p>
+                                    <p className="student-status">{displayStatus}</p>
                                 </div>
                             );
                         })}

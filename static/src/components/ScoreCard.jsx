@@ -1,7 +1,7 @@
 import React from 'react';
 import './ImpromptuDashboard.css';
 
-const ScoreCard = ({ title, score, feedback, icon }) => {
+const ScoreCard = ({ title, score = 0, feedback, icon }) => {
   const getScoreColor = (s) => {
     if (s >= 90) return '#27ae60'; // Emerald
     if (s >= 70) return '#2980b9'; // Belize Hole

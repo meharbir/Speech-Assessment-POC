@@ -1,17 +1,35 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import './components.css';
 
 const WordPopup = ({ wordData, onClose }) => {
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const audioRef = useRef(null);
+  
   if (!wordData) return null;
 
   const playCorrectPronunciation = async () => {
+    if (isAudioPlaying) return; // Prevent double-play
+    setIsAudioPlaying(true);
+    
     try {
+      // Stop any existing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      
       const response = await axios.get(`http://localhost:8000/api/synthesize?word=${wordData.Word}`, { responseType: 'blob' });
       const audioUrl = URL.createObjectURL(response.data);
-      new Audio(audioUrl).play();
+      audioRef.current = new Audio(audioUrl);
+      audioRef.current.onended = () => {
+        setIsAudioPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audioRef.current.play();
     } catch (error) {
       alert("Could not play audio.");
+      setIsAudioPlaying(false);
     }
   };
 
@@ -33,8 +51,8 @@ const WordPopup = ({ wordData, onClose }) => {
             </ul>
           </>
         )}
-        <button className="listen-button" onClick={playCorrectPronunciation}>
-          Listen to Correct Pronunciation
+        <button className="listen-button" onClick={playCorrectPronunciation} disabled={isAudioPlaying}>
+          {isAudioPlaying ? 'Playing...' : 'Listen to Correct Pronunciation'}
         </button>
       </div>
     </div>

@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 # --- END NEW IMPORTS ---
 
 from models import User, Session as DBSession, Topic, Class # Renamed to avoid conflict
+from rubrics import CBSE_ASL_DETAILED_RUBRIC
 
 # --- CONFIGURATION & INITIALIZATION ---
 load_dotenv()
@@ -130,7 +131,12 @@ class ConnectionManager:
         # Now we send specifically to the teacher's connection
         if class_id in self.active_connections:
             for connection in self.active_connections[class_id]["teacher"]:
-                await connection.send_text(message)
+                try:
+                    await connection.send_text(message)
+                except Exception as e:
+                    # Connection might be closed or dead, skip it
+                    print(f"⚠️ Could not send to teacher: {e}")
+                    pass
     
     async def broadcast_to_class(self, message: str, class_id: int):
         # Now we can broadcast to just students
@@ -400,31 +406,38 @@ def get_ai_coach_feedback(transcript: str, topic: str, duration_seconds: float, 
     words_per_minute = (word_count / duration_seconds) * 60 if duration_seconds > 0 else 0
 
     prompt = f"""
-    You are an expert, encouraging, and insightful Senior English Tutor providing a detailed analysis of an impromptu speech.
-    The user's task was to speak on the topic: "{topic}".
-    The transcript is: "{transcript}"
+    You are an expert AI English Tutor for a student in India. Your task is to provide a comprehensive evaluation of their impromptu speech based on the official CBSE ASL rubric. Your final scores MUST be converted to a 100-point scale (e.g., a rubric score of 4/5 is 80/100).
 
-    Your task is to provide a comprehensive, personalized, and actionable evaluation in a valid JSON object.
-    You MUST provide a value for every key, including the numerical scores. For arrays, return all items you find; if none, return an empty array.
+    --- OFFICIAL CBSE ASL DETAILED RUBRIC ---
+    {CBSE_ASL_DETAILED_RUBRIC}
+    --- END OF RUBRIC ---
 
-    Here is the required JSON structure. Follow it with 100% accuracy:
+    The student was asked to speak on the topic: "{topic}".
+    The student's transcript is: "{transcript}"
+
+    You MUST evaluate the transcript strictly against the provided detailed rubric. Your feedback and scores must directly reflect the criteria outlined. Provide at least 3-5 vocabulary enhancement suggestions with specific words/phrases from the transcript. For the detailed analysis, combine fluency and coherence insights with concrete examples. Provide your full analysis in a valid JSON object with the following structure:
+
     {{
-        "fluency_score": <integer from 0-100, based on your analysis of pace, rhythm and fillers>,
-        "fluency_feedback": "<string: Personalized comment on pace and rhythm.>",
-        "grammar_score": <integer from 0-100, based on the number and severity of errors>,
+        "relevance_score": <integer from 0-100, based on the 'INTERACTION' rubric criteria>,
+        "relevance_feedback": "<string: A personalized comment on how well the student's contribution was relevant to the topic, referencing the rubric.>",
+        "fluency_score": <integer from 0-100, based on the 'FLUENCY & COHERENCE' rubric criteria>,
+        "fluency_feedback": "<string: Personalized comment on pace, rhythm, and coherence, referencing the rubric.>",
+        "pronunciation_score": <integer from 0-100, based on the 'PRONUNCIATION' rubric criteria>,
+        "pronunciation_feedback": "<string: A summary of the student's pronunciation and articulation clarity, referencing the rubric.>",
+        "grammar_score": <integer from 0-100, based on the 'LANGUAGE' rubric criteria for grammar>,
         "grammar_errors": [
             {{"error": "<string: Phrase with error>", "correction": "<string: Corrected phrase>", "explanation": "<string: Simple explanation>"}}
         ],
-        "vocabulary_score": <integer from 0-100, based on your analysis of word choice>,
-        "vocabulary_feedback": "<string: Personalized comment on word choice. Suggest 1-2 better words.>",
-        "coherence_score": <integer from 0-100, based on the logical flow and structure>,
-        "coherence_feedback": "<string: Personalized comment on structure, MUST include a specific example from the transcript.>",
-        "argument_strength_analysis": "<string: Assess if the student supported their main points with reasons or examples. Provide a suggestion on how to make their argument more persuasive.>",
-        "structural_blueprint": "<string: Outline the structure of the student's speech (e.g., Opening -> Point 1 -> Point 2 -> Conclusion). Suggest a clearer blueprint if needed.>",
-        "positive_highlights": [
-            "<string: A specific, positive, and encouraging comment.>"
+        "vocabulary_score": <integer from 0-100, based on the 'LANGUAGE' rubric criteria for vocabulary>,
+        "vocabulary_feedback": "<string: Personalized comment on word choice, referencing the rubric.>",
+        "vocabulary_suggestions": [
+            {{"original": "<string: word/phrase from transcript>", "enhanced": "<string: better alternative>", "explanation": "<string: why it's better>"}}
         ],
-        "rewritten_sample": "<string: Rewrite the user's ENTIRE speech into an improved version of a SIMILAR LENGTH at an appropriate, slightly more advanced level.>"
+        "detailed_fluency_coherence_analysis": "<string: Combined detailed analysis of both fluency and coherence with specific examples from the transcript, referencing the CBSE rubric criteria>",
+        "positive_highlights": [
+            "<string: A specific, positive comment aligned with the rubric's goals.>"
+        ],
+        "rewritten_sample": "<string: Rewrite the user's speech into an improved version that would score higher against the rubric.>"
     }}
     """
     try:
@@ -447,24 +460,25 @@ def get_ai_class_summary(session_data: list, topic: str) -> dict:
     aggregated_feedback = json.dumps(session_data, indent=2)
 
     prompt = f"""
-    You are an expert educational analyst. Your task is to analyze the collected AI feedback from an entire class for a single speaking session on the topic "{topic}".
-    The data provided is a JSON array of individual student feedback objects.
+    You are an expert educational analyst for a school in India. Your task is to analyze aggregated AI feedback from an entire class for a speaking session on the topic "{topic}". Your analysis MUST be based on the official CBSE ASL rubric.
 
-    Here is the aggregated data:
+    --- OFFICIAL CBSE ASL RUBRIC ---
+    {CBSE_ASL_DETAILED_RUBRIC}
+    --- END OF RUBRIC ---
+
+    Here is the aggregated data from individual student analyses:
     {aggregated_feedback}
 
-    Based on this data, your task is to identify the most significant, common patterns. Provide your analysis in a valid JSON object with the following structure:
+    Based on this data, identify the most significant, common patterns of strengths and weaknesses across the entire class, according to the rubric. Provide your analysis in a valid JSON object with the following structure:
 
     {{
         "strengths": [
-            "<string: Identify the most prominent shared strength. Be specific, e.g., 'Many students effectively used descriptive vocabulary.'>"
+            "<string: Identify the most prominent shared strength, referencing a specific rubric criterion. e.g., 'The class demonstrated strong Fluency, with most students speaking at a consistent pace.'>"
         ],
         "weaknesses": [
-            "<string: Identify the most common shared weakness. Be specific and provide an example, e.g., 'A common grammatical error was subject-verb agreement, such as using `he go` instead of `he goes`.'>"
+            "<string: Identify the most common shared weakness, referencing a specific rubric criterion and providing an example. e.g., 'The most common Language issue was incorrect preposition usage, a key point in the grammar assessment.'>"
         ]
     }}
-    
-    Focus only on the most impactful, class-wide trends for grammar and vocabulary. Provide one key strength and one key weakness.
     """
     try:
         response = openai_client.chat.completions.create(
@@ -632,6 +646,12 @@ async def create_class(
     session.add(new_class)
     session.commit()
     session.refresh(new_class)
+    
+    # Assign the teacher to their own class
+    current_user.class_id = new_class.id
+    session.add(current_user)
+    session.commit()
+    
     return new_class
 
 @app.post("/api/teacher/class/topic")
@@ -1174,8 +1194,20 @@ async def websocket_endpoint(
             return
         
         user = session.exec(select(User).where(User.email == email)).first()
-        if not user or user.class_id != class_id:
-            # User is not found or does not belong to this class
+        if not user:
+            # User not found
+            await websocket.close(code=1008)
+            return
+        
+        # Check if user can access this class
+        if user.role == 'teacher':
+            # Teacher can connect to classes they teach
+            teacher_class = session.exec(select(Class).where(Class.teacher_id == user.id).where(Class.id == class_id)).first()
+            if not teacher_class:
+                await websocket.close(code=1008)
+                return
+        elif user.class_id != class_id:
+            # Students must belong to the class
             await websocket.close(code=1008)
             return
             
@@ -1187,6 +1219,20 @@ async def websocket_endpoint(
     # If authentication is successful, connect the user with their role
     await manager.connect(websocket, class_id, user)
     print(f"User {user.full_name} (Role: {user.role}) connected to class {class_id}")
+    
+    # If a student connects, immediately notify the teacher
+    if user.role == 'student':
+        connection_message = {
+            "type": "student_status_update",
+            "payload": {
+                "student_id": user.id,
+                "student_name": user.full_name,
+                "status": "connected"
+            }
+        }
+        await manager.send_to_teacher(json.dumps(connection_message), class_id)
+        print(f"📡 WebSocket: Notified teacher that {user.full_name} is connected")
+    
     try:
         while True:
             data = await websocket.receive_text()
@@ -1194,6 +1240,7 @@ async def websocket_endpoint(
             
             # If a student sends a status update, relay it to the teacher.
             if message.get("type") == "status_update":
+                print(f"📡 WebSocket: Student {user.full_name} sent status: {message.get('status')}")
                 update_message = {
                     "type": "student_status_update",
                     "payload": {
@@ -1202,6 +1249,7 @@ async def websocket_endpoint(
                         "status": message.get("status")
                     }
                 }
+                print(f"📡 WebSocket: Relaying to teacher in class {class_id}")
                 await manager.send_to_teacher(json.dumps(update_message), class_id)
 
             # Keep the pong response for our heartbeat
@@ -1209,11 +1257,12 @@ async def websocket_endpoint(
                 pass
     except WebSocketDisconnect:
         # On disconnect, send a final status update and then disconnect
-        disconnect_message = {
-            "type": "student_status_update",
-            "payload": { "student_id": user.id, "student_name": user.full_name, "status": "disconnected" }
-        }
-        await manager.send_to_teacher(json.dumps(disconnect_message), class_id)
+        if user.role == 'student':
+            disconnect_message = {
+                "type": "student_status_update",
+                "payload": { "student_id": user.id, "student_name": user.full_name, "status": "disconnected" }
+            }
+            await manager.send_to_teacher(json.dumps(disconnect_message), class_id)
         
         manager.disconnect(websocket, class_id, user)
         print(f"User {user.full_name} disconnected from class {class_id}")

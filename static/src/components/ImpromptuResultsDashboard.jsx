@@ -1,41 +1,32 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import ScoreCard from './ScoreCard';
+import ScoreCard from './ScoreCard'; // Assuming ScoreCard is still used for numerical scores
 import PronunciationHighlights from './PronunciationHighlights';
 import './ImpromptuDashboard.css';
 
-// Custom EncouragementCard component (no scores, only positive feedback)
-const EncouragementCard = ({ title, feedback, icon }) => {
-  return (
-    <div className="score-card encouragement-card">
-      <h4><span>{icon}</span> {title}</h4>
-      <div className="encouragement-content">
-        <p className="encouragement-feedback">{feedback}</p>
-      </div>
+// A new, simpler card for displaying text feedback
+const FeedbackCard = ({ title, feedback, icon }) => (
+    <div className="score-card">
+        <h4><span>{icon}</span> {title}</h4>
+        <p className="score-feedback" style={{ marginTop: '20px', fontSize: '1em' }}>{feedback}</p>
     </div>
-  );
-};
+);
 
 const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
-  // Add this safety check at the top of the component
-  if (!results || !results.aiCoachAnalysis) {
-    return (
-      <div className="impromptu-dashboard">
-        <h2>Error</h2>
-        <p>Could not load the analysis for this session. The data might be missing or corrupted.</p>
-      </div>
-    );
-  }
-
   const { aiCoachAnalysis, transcript } = results;
-  const [showAllGrammar, setShowAllGrammar] = useState(false);
-  const [showAllVocab, setShowAllVocab] = useState(false);
+  const [showAllErrors, setShowAllErrors] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [activeTab, setActiveTab] = useState('coach');
+  const [showAllGrammar, setShowAllGrammar] = useState(false);
+  const [showAllVocab, setShowAllVocab] = useState(false);
 
-  const grammarErrors = aiCoachAnalysis?.grammar_errors || [];
-  const vocabularySuggestions = aiCoachAnalysis?.vocabulary_suggestions || [];
-  const positiveHighlights = aiCoachAnalysis?.positive_highlights || [];
+  // Safety checks for data
+  if (!aiCoachAnalysis) {
+      return <div>Loading feedback...</div>;
+  }
+
+  const grammarErrors = aiCoachAnalysis.grammar_errors || [];
+  const positiveHighlights = aiCoachAnalysis.positive_highlights || [];
 
   const playSampleAudio = async () => {
     if (isAudioPlaying) return;
@@ -60,33 +51,33 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
   const renderCoachView = () => (
     <>
       <div className="score-cards-grid">
-        <EncouragementCard 
-          icon="📝"
-          title="Grammar" 
-          feedback={aiCoachAnalysis.grammar_feedback || "Grammar analysis pending..."} 
+        {/* The summary cards will remain here */}
+        <FeedbackCard 
+          icon="🎯"
+          title="Relevance to Topic" 
+          feedback={aiCoachAnalysis.relevance_feedback} 
         />
-        <EncouragementCard 
-          icon="📚"
-          title="Vocabulary" 
-          feedback={aiCoachAnalysis.vocabulary_feedback || "Vocabulary analysis pending..."} 
-        />
-        <EncouragementCard 
-          icon="🔗"
-          title="Coherence" 
-          feedback={aiCoachAnalysis.coherence_feedback ? 
-            (aiCoachAnalysis.coherence_feedback.length > 150 ? 
-              aiCoachAnalysis.coherence_feedback.substring(0, 150) + "..." : 
-              aiCoachAnalysis.coherence_feedback) : 
-            "Coherence analysis pending..."} 
-        />
-        <EncouragementCard 
+        <FeedbackCard 
           icon="🗣️"
-          title="Fluency" 
-          feedback={aiCoachAnalysis.fluency_feedback ? 
-            (aiCoachAnalysis.fluency_feedback.length > 150 ? 
-              aiCoachAnalysis.fluency_feedback.substring(0, 150) + "..." : 
-              aiCoachAnalysis.fluency_feedback) : 
-            "Fluency analysis pending..."} 
+          title="Fluency & Coherence" 
+          feedback={aiCoachAnalysis.fluency_feedback} 
+        />
+         <FeedbackCard 
+          icon="🎙️"
+          title="Pronunciation" 
+          feedback={aiCoachAnalysis.pronunciation_feedback} 
+        />
+        <ScoreCard 
+          icon="📝"
+          title="Grammar Score" 
+          score={aiCoachAnalysis.grammar_score} 
+          feedback={`${(aiCoachAnalysis.grammar_errors || []).length} errors found`} 
+        />
+        <ScoreCard 
+          icon="📚"
+          title="Vocabulary Score" 
+          score={aiCoachAnalysis.vocabulary_score} 
+          feedback={aiCoachAnalysis.vocabulary_feedback} 
         />
       </div>
 
@@ -95,6 +86,7 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
         <p className="transcript-display">{transcript}</p>
       </div>
 
+      {/* --- ADDING BACK THE DETAILED SECTIONS --- */}
       <div className="feedback-section">
         <h3>📝 Grammar Corrections</h3>
         {grammarErrors.length > 0 ? (
@@ -119,10 +111,10 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
 
       <div className="feedback-section">
         <h3>📚 Vocabulary Enhancements</h3>
-        {vocabularySuggestions.length > 0 ? (
+        {(aiCoachAnalysis.vocabulary_suggestions || []).length > 0 ? (
           <>
             <ul className="feedback-list">
-              {(showAllVocab ? vocabularySuggestions : vocabularySuggestions.slice(0, 3)).map((item, i) => (
+              {(showAllVocab ? aiCoachAnalysis.vocabulary_suggestions : aiCoachAnalysis.vocabulary_suggestions.slice(0, 3)).map((item, i) => (
                 <li key={i}>
                   <p><strong>Original:</strong> "{item.original}"</p>
                   <p><strong>Enhanced:</strong> "{item.enhanced}"</p>
@@ -130,23 +122,18 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
                 </li>
               ))}
             </ul>
-            {vocabularySuggestions.length > 3 && (
+            {aiCoachAnalysis.vocabulary_suggestions.length > 3 && (
               <button onClick={() => setShowAllVocab(!showAllVocab)} className="show-more-button">
-                {showAllVocab ? 'Show Fewer' : `Show All ${vocabularySuggestions.length} Enhancements`}
+                {showAllVocab ? 'Show Fewer' : `Show All ${aiCoachAnalysis.vocabulary_suggestions.length} Enhancements`}
               </button>
             )}
           </>
         ) : <p>Your vocabulary was clear and effective.</p>}
       </div>
-
+      
       <div className="feedback-section">
-        <h3>🔗 Coherence Analysis</h3>
-        <p>{aiCoachAnalysis.coherence_feedback}</p>
-      </div>
-
-      <div className="feedback-section">
-        <h3>🗣️ Fluency Analysis</h3>
-        <p>{aiCoachAnalysis.fluency_feedback}</p>
+        <h3>🗣️ Fluency & Coherence Analysis</h3>
+        <div className="detailed-feedback">{aiCoachAnalysis.detailed_fluency_coherence_analysis}</div>
       </div>
     </>
   );
@@ -189,7 +176,6 @@ const ImpromptuResultsDashboard = ({ results, onTryAgain, onChangeTopic }) => {
         {activeTab === 'pronunciation' && <PronunciationHighlights assessment={results.pronunciationAssessment} />}
       </div>
 
-      {/* Rewritten Sample at the very bottom */}
       <div className="feedback-section rewritten-bottom">
         <h3>✨ Rewritten Sample</h3>
         <div className="sample-container">
