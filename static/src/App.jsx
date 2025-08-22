@@ -9,6 +9,7 @@ import BatchPractice from './components/BatchPractice';
 import ChunkedImpromptuPractice from './components/ChunkedImpromptuPractice';
 import ExperimentalPractice from './components/ExperimentalPractice';
 import ABTestPractice from './components/ABTestPractice';
+import HybridGroqPractice from './components/HybridGroqPractice';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import MyProgressPage from './pages/MyProgressPage';
@@ -116,6 +117,9 @@ function App() {
           }
           if (practiceMode === 'ab-test') {
             return <ABTestPractice />;
+          }
+          if (practiceMode === 'hybrid-groq') {
+            return <HybridGroqPractice assignedTopic={assignedTask ? assignedTask.text : ''} onTaskComplete={handleTaskComplete} isTaskAssigned={!!assignedTask} sendMessage={sendMessage} />;
           }
           // If no task is assigned, show the mode selector
           return <SpeakingModeSelector onModeSelect={setMode} currentUser={currentUser} />;

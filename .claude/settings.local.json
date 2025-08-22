@@ -21,8 +21,11 @@
       "Bash(find:*)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(./venv/Scripts/python.exe -c \"import librosa; print(''librosa imports successfully'')\")",
+      "Bash(./venv/Scripts/python.exe -c \"from audio_metrics import AdvancedAudioAnalyzer; print(''AdvancedAudioAnalyzer imports successfully'')\")"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }

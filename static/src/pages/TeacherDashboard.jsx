@@ -182,6 +182,13 @@ const TeacherDashboard = ({ studentStatuses, sendMessage }) => {
                         placeholder="e.g., The quick brown fox jumps over the lazy dog."
                         onBroadcast={handleBroadcastTopic}
                     />
+                    <BroadcastControlCard
+                        mode="hybrid-groq"
+                        title="🚀 Advanced Hybrid Analysis"
+                        description="Set a topic for comprehensive analysis with Whisper, Azure, Groq, and audio metrics."
+                        placeholder="e.g., The benefits of technology in education"
+                        onBroadcast={handleBroadcastTopic}
+                    />
                 </div>
             )}
 

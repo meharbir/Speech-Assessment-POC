@@ -38,35 +38,39 @@ from datetime import datetime, timedelta, timezone
 from models import User, Session as DBSession, Topic, Class # Renamed to avoid conflict
 from rubrics import CBSE_ASL_DETAILED_RUBRIC
 
+# --- NEW HYBRID GROQ IMPORTS ---
+from groq_service import GroqService
+from audio_metrics import AdvancedAudioAnalyzer
+
 # --- CONFIGURATION & INITIALIZATION ---
 load_dotenv()
 app = FastAPI()
 
 # --- DATABASE CONNECTION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
-print(f"🔍 DEBUG: DATABASE_URL loaded: {DATABASE_URL}")
-print(f"🔍 DEBUG: DATABASE_URL length: {len(DATABASE_URL) if DATABASE_URL else 'None'}")
+print(f"[DEBUG] DATABASE_URL loaded: {DATABASE_URL}")
+print(f"[DEBUG] DATABASE_URL length: {len(DATABASE_URL) if DATABASE_URL else 'None'}")
 
 # Test DNS resolution
 try:
     hostname = "db.nfrgfkmvhocucfkoimku.supabase.co"
-    print(f"🔍 DEBUG: Testing DNS resolution for {hostname}")
+    print(f"[DEBUG] Testing DNS resolution for {hostname}")
     ip = socket.gethostbyname(hostname)
-    print(f"✅ DEBUG: DNS resolved to IP: {ip}")
+    print(f"[DEBUG] DNS resolved to IP: {ip}")
 except Exception as e:
-    print(f"❌ DEBUG: DNS resolution failed: {e}")
+    print(f"[DEBUG] DNS resolution failed: {e}")
 
 engine = create_engine(DATABASE_URL, echo=True)
-print(f"🔍 DEBUG: SQLAlchemy engine created successfully")
+print(f"[DEBUG] SQLAlchemy engine created successfully")
 
 def create_db_and_tables():
-    print("🔍 DEBUG: Starting create_db_and_tables()")
+    print("[DEBUG] Starting create_db_and_tables()")
     try:
-        print("🔍 DEBUG: About to call SQLModel.metadata.create_all(engine)")
+        print("[DEBUG] About to call SQLModel.metadata.create_all(engine)")
         SQLModel.metadata.create_all(engine)
-        print("✅ DEBUG: Database tables created successfully!")
+        print("[DEBUG] Database tables created successfully!")
     except Exception as e:
-        print(f"❌ DEBUG: Database table creation failed: {e}")
+        print(f"[DEBUG] Database table creation failed: {e}")
         raise
 
 async def run_ping_task():
@@ -78,11 +82,11 @@ async def run_ping_task():
 # Connect to the database and create tables on startup
 @app.on_event("startup")
 def on_startup():
-    print("🔍 DEBUG: FastAPI startup event triggered")
+    print("[DEBUG] FastAPI startup event triggered")
     create_db_and_tables()
     # Start the ping task as a background task
     asyncio.create_task(run_ping_task())
-    print("✅ DEBUG: Startup completed successfully and ping task started")
+    print("[DEBUG] Startup completed successfully and ping task started")
 
 # --- SECURITY CONFIGURATION ---
 SECRET_KEY = os.getenv("SECRET_KEY", "a_super_secret_dev_key_change_this") # CHANGE IN PRODUCTION
@@ -230,7 +234,34 @@ AZURE_STORAGE_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
 
+# --- HYBRID GROQ SERVICE INITIALIZATION ---
+groq_service = GroqService()
+audio_analyzer = AdvancedAudioAnalyzer()
+
 # --- HELPER FUNCTIONS ---
+
+def make_json_serializable(obj):
+    """
+    Recursively convert an object to make it JSON serializable.
+    Handles numpy types, booleans, and other non-serializable objects.
+    """
+    if obj is None:
+        return None
+    elif isinstance(obj, bool):
+        return bool(obj)  # Ensure it's a Python bool, not numpy.bool_
+    elif isinstance(obj, (int, float, str)):
+        return obj
+    elif hasattr(obj, 'item'):  # numpy scalars
+        return obj.item()
+    elif hasattr(obj, 'tolist'):  # numpy arrays
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [make_json_serializable(item) for item in obj]
+    else:
+        # For any other type, try to convert to string
+        return str(obj)
 
 def convert_audio_with_ffmpeg(audio_bytes: bytes) -> bytes:
     try:
@@ -863,16 +894,17 @@ async def analyze_speech(
 
             if current_user:
                 # Save the session using the new standardized wrapper
+                serializable_result = make_json_serializable(detailed_result)
                 db_session = DBSession(
                     topic="Pronunciation Practice",
                     transcript=detailed_result.get("Display"),
-                    feedback_json=json.dumps({"type": "pronunciation", "data": detailed_result}),
+                    feedback_json=json.dumps({"type": "pronunciation", "data": serializable_result}),
                     student_id=current_user.id
                 )
                 session.add(db_session)
                 session.commit()
 
-            return JSONResponse(content={"mode": "pronunciation", "azureAssessment": detailed_result})
+            return JSONResponse(content={"mode": "pronunciation", "azureAssessment": make_json_serializable(detailed_result)})
         else:
             error_detail = azure_data.get("DisplayText", "Azure API returned an unsuccessful status.")
             raise HTTPException(status_code=502, detail=f"Pronunciation assessment failed: {error_detail}")
@@ -891,17 +923,18 @@ async def analyze_speech(
         
         if current_user:
             # Save the session using the new standardized wrapper
+            serializable_analysis = make_json_serializable(ai_coach_analysis)
             db_session = DBSession(
                 topic=topic,
                 transcript=transcript,
-                feedback_json=json.dumps({"type": "impromptu", "data": ai_coach_analysis}),
+                feedback_json=json.dumps({"type": "impromptu", "data": serializable_analysis}),
                 student_id=current_user.id
             )
             session.add(db_session)
             session.commit()
 
         final_result = { "mode": "impromptu", "transcript": transcript, "azureMetrics": { "wordCount": word_count, "duration": duration_seconds }, "aiCoachAnalysis": ai_coach_analysis }
-        return JSONResponse(content=final_result)
+        return JSONResponse(content=make_json_serializable(final_result))
     
     else:
         raise HTTPException(status_code=400, detail="Invalid analysis mode specified.")
@@ -1006,10 +1039,11 @@ async def analyze_chunked_speech(
         # --- MODIFIED DATABASE SAVING LOGIC ---
         if current_user:
             # Save the session using the standardized {"type": "...", "data": ...} wrapper
+            serializable_analysis = make_json_serializable(ai_coach_analysis)
             db_session = DBSession(
                 topic=topic,
                 transcript=full_transcript,
-                feedback_json=json.dumps({"type": "impromptu", "data": ai_coach_analysis}),
+                feedback_json=json.dumps({"type": "impromptu", "data": serializable_analysis}),
                 student_id=current_user.id
             )
             session.add(db_session)
@@ -1026,7 +1060,7 @@ async def analyze_chunked_speech(
             "azureMetrics": {"wordCount": total_word_count, "duration": duration_seconds},
             "aiCoachAnalysis": ai_coach_analysis
         }
-        return JSONResponse(content=final_result)
+        return JSONResponse(content=make_json_serializable(final_result))
 
     finally:
         os.remove(temp_in_path)
@@ -1117,7 +1151,7 @@ async def get_batch_results(
         "azureMetrics": {"wordCount": word_count, "duration": duration_seconds},
         "aiCoachAnalysis": ai_coach_analysis
     }
-    return JSONResponse(content=final_result)
+    return JSONResponse(content=make_json_serializable(final_result))
 
 @app.post("/api/analyze-ab-test")
 async def analyze_ab_test(
@@ -1163,16 +1197,16 @@ async def analyze_ab_test(
     final_result = {
         "azure_track": {
             "transcript": transcript_azure,
-            "pronunciationAssessment": pronunciation_azure.get("NBest")[0],
+            "pronunciationAssessment": pronunciation_azure.get("NBest")[0] if pronunciation_azure.get("NBest") else {},
             "aiCoachAnalysis": ai_coach_azure
         },
         "whisper_track": {
             "transcript": transcript_whisper,
-            "pronunciationAssessment": pronunciation_whisper.get("NBest")[0],
+            "pronunciationAssessment": pronunciation_whisper.get("NBest")[0] if pronunciation_whisper.get("NBest") else {},
             "aiCoachAnalysis": ai_coach_whisper
         }
     }
-    return JSONResponse(content=final_result)
+    return JSONResponse(content=make_json_serializable(final_result))
 
 @app.websocket("/ws/{class_id}")
 async def websocket_endpoint(
@@ -1266,6 +1300,305 @@ async def websocket_endpoint(
         
         manager.disconnect(websocket, class_id, user)
         print(f"User {user.full_name} disconnected from class {class_id}")
+
+
+def generate_student_friendly_audio_tips(audio_metrics: dict) -> dict:
+    """
+    Generate age-appropriate, actionable tips for 6th graders based on audio metrics
+    """
+    tips = {}
+    
+    # Get assessment scores
+    assessments = audio_metrics.get("assessments", {})
+    pronunciation = audio_metrics.get("pronunciation_analysis", {})
+    fluency = audio_metrics.get("fluency_metrics", {})
+    voice_quality = audio_metrics.get("voice_quality", {})
+    
+    # Pronunciation Tips
+    pitch_range = pronunciation.get("pitch_range_hz", 0)
+    is_monotonous = pronunciation.get("is_monotonous", False)
+    
+    if is_monotonous:
+        tips["pitch_variety"] = {
+            "score": max(0, 100 - 20),  # Reduce score for monotony
+            "tip": "Try adding more emotion to your voice! Raise your pitch when asking questions and lower it when making important points. Practice reading dialogue with different character voices!",
+            "exercise": "Read a fairy tale aloud, making each character sound different."
+        }
+    else:
+        tips["pitch_variety"] = {
+            "score": min(100, (pitch_range / 170) * 100),  # Scale to 100
+            "tip": "Great job varying your voice! Your speech has good emotional expression.",
+            "exercise": "Keep practicing with storytelling to maintain this variety."
+        }
+    
+    # Fluency Tips  
+    speaking_rate = fluency.get("speaking_rate_wpm")
+    long_pauses = fluency.get("long_pauses", 0)
+    
+    fluency_score = 100
+    fluency_tip = "Good speaking pace! "
+    
+    if speaking_rate:
+        if speaking_rate < 120:
+            fluency_score -= 15
+            fluency_tip = "You're speaking a bit slowly. Try to speak more naturally, like you're talking to a friend."
+        elif speaking_rate > 160:
+            fluency_score -= 10
+            fluency_tip = "You're speaking quite fast. Take a breath between sentences to help listeners follow along."
+    
+    if long_pauses > 0:
+        fluency_score -= (long_pauses * 10)
+        fluency_tip += f" Try to avoid long pauses ({long_pauses} found). If you need to think, use 'um' briefly or take a quick breath."
+    
+    tips["speaking_fluency"] = {
+        "score": max(0, fluency_score),
+        "tip": fluency_tip,
+        "exercise": "Practice reading aloud for 5 minutes daily to build natural rhythm."
+    }
+    
+    # Voice Quality Tips
+    jitter = voice_quality.get("jitter_percent", 0)
+    shimmer = voice_quality.get("shimmer_percent", 0)
+    hnr = voice_quality.get("hnr_db", 20)
+    
+    voice_score = 100
+    voice_tip = ""
+    
+    if jitter > 1.04:
+        voice_score -= 15
+        voice_tip += "Your voice sounds a bit shaky. "
+    
+    if shimmer > 3.81:
+        voice_score -= 15
+        voice_tip += "Your volume varies too much. "
+        
+    if hnr < 20:
+        voice_score -= 20
+        voice_tip += "Your voice could be clearer. "
+    
+    if voice_score < 80:
+        voice_tip += "Try sitting up straight, speaking from your belly (not your throat), and opening your mouth wider. Practice saying 'Ahh' like at the doctor!"
+        exercise = "Practice tongue twisters: 'Red leather, yellow leather' or 'She sells seashells by the seashore.'"
+    else:
+        voice_tip = "Excellent voice quality! Your speech is clear and steady."
+        exercise = "Keep up the great work! Try reading poetry aloud to maintain your clear voice."
+    
+    tips["voice_clarity"] = {
+        "score": max(0, voice_score),
+        "tip": voice_tip,
+        "exercise": exercise
+    }
+    
+    return tips
+
+
+@app.post("/api/analyze-hybrid-groq")
+async def analyze_hybrid_groq(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    audio_file: UploadFile = File(...),
+    topic: str = Form(...)
+):
+    """
+    Hybrid analysis using Whisper (Groq) + Azure Pronunciation + Groq LLaMA + Advanced Audio Metrics
+    
+    Flow:
+    1. Serial: Get transcript from Groq Whisper
+    2. Parallel: Azure pronunciation + Groq LLaMA + Audio metrics
+    3. Combine results and save to database if user is logged in
+    """
+    try:
+        # Read audio data
+        audio_bytes = await audio_file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="The submitted audio file is empty.")
+
+        print(f"[HYBRID] Starting hybrid Groq analysis for topic: {topic}")
+        
+        # --- STEP A (SERIAL): Get transcript from Groq Whisper first ---
+        print("[STEP A] Transcribing with Groq Whisper...")
+        
+        # Create temporary file for Groq (it expects a file-like object)
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_audio.flush()
+            
+            # Get transcript from Groq Whisper
+            with open(temp_audio.name, 'rb') as audio_for_groq:
+                transcript = await groq_service.transcribe_with_whisper(audio_for_groq)
+        
+        # Clean up temp file
+        os.unlink(temp_audio.name)
+        
+        print(f"[STEP A] Transcript obtained: {len(transcript)} characters")
+        
+        # --- STEP B (PARALLEL): Run three analyses concurrently ---
+        print("[STEP B] Running parallel analyses...")
+        
+        async def azure_pronunciation_task():
+            """Azure pronunciation assessment using Groq transcript as reference"""
+            print("[AZURE] Starting Azure pronunciation assessment...")
+            # Convert audio for Azure (needs WAV format)
+            wav_data = convert_audio_with_ffmpeg(audio_bytes)
+            result = get_pronunciation_assessment(wav_data, transcript)
+            print("[AZURE] Azure pronunciation assessment completed")
+            return result
+        
+        async def groq_language_task():
+            """Groq LLaMA language analysis"""
+            print("[GROQ] Starting Groq LLaMA language analysis...")
+            result = await groq_service.analyze_with_llama(transcript, topic)
+            print("[GROQ] Groq LLaMA analysis completed")
+            return result
+        
+        async def audio_metrics_task():
+            """Advanced audio metrics analysis"""
+            print("[METRICS] Starting advanced audio metrics analysis...")
+            result = await audio_analyzer.analyze_comprehensive_metrics(audio_bytes, transcript)
+            print("[METRICS] Audio metrics analysis completed")
+            return result
+        
+        async def openai_coach_task():
+            """OpenAI AI Coach analysis using same prompts for comparison"""
+            print("[OPENAI] Starting OpenAI AI Coach analysis...")
+            
+            try:
+                # Calculate duration and word count for AI coach
+                import librosa
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                    wav_data = convert_audio_with_ffmpeg(audio_bytes)
+                    temp_wav.write(wav_data)
+                    temp_wav.flush()
+                    temp_wav_path = temp_wav.name
+                
+                try:
+                    # Get audio duration using librosa (more compatible)
+                    audio_array, sample_rate = librosa.load(temp_wav_path, sr=None)
+                    duration_seconds = len(audio_array) / sample_rate
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_wav_path):
+                        os.unlink(temp_wav_path)
+                
+                word_count = len(transcript.split())
+                
+                # Call existing AI coach function
+                result = get_ai_coach_feedback(transcript, topic, duration_seconds, word_count)
+                print("[OPENAI] OpenAI AI Coach analysis completed")
+                return result
+                
+            except Exception as e:
+                print(f"[ERROR] OpenAI coach analysis failed: {e}")
+                # Return a fallback structure
+                return {
+                    "error": str(e),
+                    "grammar_score": 0,
+                    "vocabulary_score": 0,
+                    "grammar_errors": [],
+                    "vocabulary_suggestions": [],
+                    "fluency_feedback": "Analysis failed",
+                    "relevance_feedback": "Analysis failed"
+                }
+        
+        # Run all four tasks in parallel using asyncio.gather
+        azure_result, groq_result, audio_metrics, openai_result = await asyncio.gather(
+            azure_pronunciation_task(),
+            groq_language_task(),
+            audio_metrics_task(),
+            openai_coach_task(),
+            return_exceptions=True
+        )
+        
+        # Check for exceptions in parallel tasks
+        if isinstance(azure_result, Exception):
+            print(f"[ERROR] Azure analysis failed: {azure_result}")
+            azure_result = {"error": str(azure_result)}
+        
+        if isinstance(groq_result, Exception):
+            print(f"[ERROR] Groq analysis failed: {groq_result}")
+            groq_result = {"error": str(groq_result)}
+        
+        if isinstance(audio_metrics, Exception):
+            print(f"[ERROR] Audio metrics failed: {audio_metrics}")
+            audio_metrics = {"error": str(audio_metrics)}
+        
+        if isinstance(openai_result, Exception):
+            print(f"[ERROR] OpenAI analysis failed: {openai_result}")
+            openai_result = {"error": str(openai_result)}
+        
+        # --- STEP C (COMBINE): Create unified response ---
+        print("[STEP C] Combining results...")
+        
+        # Generate student-friendly tips for audio metrics
+        student_friendly_tips = {}
+        if not isinstance(audio_metrics, dict) or "error" not in audio_metrics:
+            try:
+                student_friendly_tips = generate_student_friendly_audio_tips(audio_metrics)
+                print("[STEP C] Generated student-friendly audio tips")
+            except Exception as e:
+                print(f"[WARNING] Failed to generate audio tips: {e}")
+                student_friendly_tips = {"error": "Could not generate tips"}
+        
+        # Add tips to audio metrics
+        if isinstance(audio_metrics, dict) and "error" not in audio_metrics:
+            audio_metrics["student_friendly_tips"] = student_friendly_tips
+        
+        combined_result = {
+            "transcript": transcript,
+            "topic": topic,
+            "azure_pronunciation": azure_result,
+            "groq_language_analysis": groq_result,
+            "openai_coach_analysis": openai_result,
+            "audio_metrics": audio_metrics,
+            "analysis_metadata": {
+                "processing_type": "hybrid_groq",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "services_used": ["groq_whisper", "azure_pronunciation", "groq_llama", "openai_coach", "advanced_audio_metrics"]
+            }
+        }
+        
+        # --- DATABASE PERSISTENCE ---
+        if current_user:
+            print(f"[DATABASE] Saving session to database for user: {current_user.full_name}")
+            
+            # Make data JSON serializable before saving
+            serializable_result = make_json_serializable(combined_result)
+            
+            # Create database session using standardized wrapper format
+            db_session = DBSession(
+                topic=topic,
+                transcript=transcript,
+                feedback_json=json.dumps({
+                    "type": "hybrid_groq", 
+                    "data": serializable_result
+                }),
+                student_id=current_user.id
+            )
+            
+            session.add(db_session)
+            try:
+                session.commit()
+                print("[DATABASE] Session saved to database successfully")
+            except Exception as e:
+                print(f"[ERROR] Database save failed: {e}")
+                session.rollback()
+        else:
+            print("[GUEST] Guest user - session not saved to database")
+        
+        print("[SUCCESS] Hybrid analysis completed successfully")
+        # Return JSON-serializable data to frontend
+        return make_json_serializable(combined_result)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[ERROR] Hybrid analysis failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Hybrid analysis failed: {str(e)}"
+        )
+
 
 # --- THIS MUST BE THE LAST ROUTE DEFINITION ---
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

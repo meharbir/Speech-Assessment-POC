@@ -51,3 +51,8 @@ sqlmodel
 python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
+groq==0.31.0
+librosa==0.10.1
+praat-parselmouth==0.4.3
+scipy>=1.13.0
+soundfile==0.12.1

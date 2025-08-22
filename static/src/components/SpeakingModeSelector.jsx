@@ -89,6 +89,12 @@ const SpeakingModeSelector = ({ onModeSelect, currentUser }) => {
           <p>Compare Azure and Whisper transcription services side-by-side.</p>
           <span className="grade-level">Research Mode</span>
         </div>
+        
+        <div className="mode-card" onClick={() => onModeSelect('hybrid-groq')}>
+          <h2>🚀 Advanced Hybrid Analysis</h2>
+          <p>Whisper + Azure + Groq with comprehensive audio metrics and AI comparison.</p>
+          <span className="grade-level">Cutting Edge</span>
+        </div>
       </div>
     </div>
   );
