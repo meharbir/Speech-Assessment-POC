@@ -86,6 +86,10 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
     audio_metrics 
   } = results;
 
+  // Extract the proper pronunciation data structure
+  // Azure returns full response, but PronunciationHighlights expects NBest[0]
+  const pronunciationAssessment = azure_pronunciation?.NBest?.[0] || azure_pronunciation;
+
   // Get current AI analysis based on comparison toggle
   const currentAiAnalysis = aiComparison === 'openai' ? openai_coach_analysis : groq_language_analysis;
   const grammarErrors = currentAiAnalysis?.grammar_errors || [];
@@ -369,7 +373,7 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
       <div className="tab-content">
         {activeTab === 'coach' && renderAiCoachTab()}
         {activeTab === 'pronunciation' && (
-          <PronunciationHighlights assessment={azure_pronunciation} />
+          <PronunciationHighlights assessment={pronunciationAssessment} />
         )}
         {activeTab === 'audio' && renderAudioMetricsTab()}
       </div>

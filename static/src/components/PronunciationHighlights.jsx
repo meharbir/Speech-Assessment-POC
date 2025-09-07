@@ -32,12 +32,6 @@ const PronunciationHighlights = ({ assessment }) => {
             score={assessment.FluencyScore || 0} 
             feedback={assessment.FluencyScore ? "Smoothness and naturalness" : "Not available in basic mode"} 
           />
-          <ScoreCard 
-            icon="🎵" 
-            title="Prosody" 
-            score={assessment.ProsodyScore || 0} 
-            feedback={assessment.ProsodyScore ? "Stress, rhythm, and intonation" : "Not available in basic mode"} 
-          />
         </div>
       </div>
 
