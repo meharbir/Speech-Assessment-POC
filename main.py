@@ -23,7 +23,7 @@ from openai import OpenAI
 import azure.cognitiveservices.speech as speechsdk
 from azure.storage.blob.aio import BlobServiceClient
 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import create_engine, SQLModel, select
 
 # --- NEW IMPORTS FOR AUTH ---
@@ -1876,6 +1876,366 @@ async def analyze_hybrid_groq(
         raise HTTPException(
             status_code=500, 
             detail=f"Hybrid analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/analyze-hybrid-fast")
+async def analyze_hybrid_fast(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    audio_file: UploadFile = File(...),
+    topic: str = Form(...)
+):
+    """
+    FAST hybrid analysis - returns quick results (Whisper + OpenAI + Groq LLaMA)
+    
+    This endpoint provides immediate feedback while slower processing happens separately.
+    Processing time: 5-10 seconds vs 30-60 seconds for full analysis.
+    
+    Returns:
+    - transcript: From Groq Whisper
+    - openai_coach_analysis: Fast AI feedback
+    - groq_language_analysis: Fast AI feedback
+    - session_id: For linking with slow results
+    """
+    try:
+        # Read audio data
+        audio_bytes = await audio_file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="The submitted audio file is empty.")
+        
+        # Initialize services
+        groq_service = GroqService()
+        
+        # --- STEP A: Get transcript from Groq Whisper (FAST) ---
+        print("[FAST] Starting Groq Whisper transcription...")
+        
+        # FIX: Create temporary file for Groq (same as legacy endpoint)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_audio.flush()
+            
+            # Pass file object instead of UploadFile
+            with open(temp_audio.name, 'rb') as audio_for_groq:
+                transcript = await groq_service.transcribe_with_whisper(audio_for_groq)
+        
+        # Clean up temp file
+        os.unlink(temp_audio.name)
+        
+        print(f"[FAST] Transcript obtained: {len(transcript)} characters")
+        
+        if not transcript.strip():
+            raise HTTPException(status_code=400, detail="No speech detected in the audio file.")
+        
+        # --- STEP B: Run FAST analyses in parallel ---
+        print("[FAST] Running parallel fast analyses...")
+        
+        async def groq_language_task():
+            """Groq LLaMA language analysis"""
+            print("[GROQ] Starting Groq LLaMA language analysis...")
+            result = await groq_service.analyze_with_llama(transcript, topic)
+            print("[GROQ] Groq LLaMA analysis completed")
+            return result
+        
+        async def openai_coach_task():
+            """OpenAI AI Coach analysis using same prompts for comparison"""
+            print("[OPENAI] Starting OpenAI AI Coach analysis...")
+            
+            try:
+                # Calculate duration and word count for AI coach
+                import librosa
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                    wav_data = convert_audio_with_ffmpeg(audio_bytes)
+                    temp_wav.write(wav_data)
+                    temp_wav.flush()
+                    temp_wav_path = temp_wav.name
+                
+                try:
+                    # Get audio duration using librosa (more compatible)
+                    audio_array, sample_rate = librosa.load(temp_wav_path, sr=None)
+                    duration_seconds = len(audio_array) / sample_rate
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_wav_path):
+                        os.unlink(temp_wav_path)
+                
+                word_count = len(transcript.split())
+                
+                # Call existing AI coach function
+                result = get_ai_coach_feedback(transcript, topic, duration_seconds, word_count)
+                print("[OPENAI] OpenAI AI Coach analysis completed")
+                return result
+                
+            except Exception as e:
+                print(f"[ERROR] OpenAI coach analysis failed: {e}")
+                # Return a fallback structure
+                return {
+                    "error": str(e),
+                    "grammar_score": 0,
+                    "vocabulary_score": 0,
+                    "grammar_errors": [],
+                    "vocabulary_suggestions": [],
+                    "fluency_feedback": "Analysis failed",
+                    "relevance_feedback": "Analysis failed"
+                }
+        
+        # Run fast analyses in parallel
+        groq_result, openai_result = await asyncio.gather(
+            groq_language_task(),
+            openai_coach_task(),
+            return_exceptions=True
+        )
+        
+        # Check for exceptions in parallel tasks
+        if isinstance(groq_result, Exception):
+            print(f"[ERROR] Groq analysis failed: {groq_result}")
+            groq_result = {"error": str(groq_result)}
+        
+        if isinstance(openai_result, Exception):
+            print(f"[ERROR] OpenAI analysis failed: {openai_result}")
+            openai_result = {"error": str(openai_result)}
+        
+        # Generate session ID for linking with slow results
+        import uuid
+        session_id = str(uuid.uuid4())
+        
+        # Create fast result
+        fast_result = {
+            "session_id": session_id,
+            "transcript": transcript,
+            "topic": topic,
+            "openai_coach_analysis": openai_result,
+            "groq_language_analysis": groq_result,
+            "processing_type": "hybrid_fast",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "services_used": ["groq_whisper", "groq_llama", "openai_coach"],
+            "slow_processing_required": True
+        }
+        
+        print("[SUCCESS] Fast analysis completed successfully")
+        # Return JSON-serializable data to frontend
+        return make_json_serializable(fast_result)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[ERROR] Fast analysis failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Fast analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/analyze-hybrid-slow")
+async def analyze_hybrid_slow(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    session_id: str = Form(...),
+    transcript: str = Form(...),
+    topic: str = Form(...),
+    audio_file: UploadFile = File(...)
+):
+    """
+    SLOW hybrid analysis - returns Azure pronunciation and audio metrics
+    
+    This endpoint handles the time-consuming processing that happens after fast results.
+    Processing time: 30-60 seconds for long audio with chunking.
+    
+    Requires:
+    - session_id: From fast endpoint for result linking
+    - transcript: From fast endpoint
+    - topic: Original topic
+    - audio_file: Original audio file
+    
+    Returns:
+    - azure_pronunciation: Detailed pronunciation assessment
+    - audio_metrics: Advanced voice quality metrics
+    """
+    try:
+        # Read audio data
+        audio_bytes = await audio_file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="The submitted audio file is empty.")
+        
+        # Initialize audio analyzer
+        audio_analyzer = AdvancedAudioAnalyzer()
+        
+        # --- STEP A: Run SLOW analyses in parallel ---
+        print(f"[SLOW] Starting slow analyses for session {session_id}...")
+        
+        async def azure_pronunciation_task():
+            """Azure pronunciation assessment with automatic chunking for long audio"""
+            print("[AZURE] Starting Azure pronunciation assessment...")
+            # Convert audio for Azure (needs WAV format)
+            wav_data = convert_audio_with_ffmpeg(audio_bytes)
+            duration_seconds = len(wav_data) / (16000 * 2)  # Calculate duration
+            
+            if duration_seconds <= 30:
+                # Short audio - use direct processing (existing functionality)
+                print("[AZURE] Short audio detected - using direct processing")
+                result = get_pronunciation_assessment(wav_data, transcript)
+                print("[AZURE] Azure pronunciation assessment completed")
+                return result
+            else:
+                # Long audio - use precision chunking
+                print(f"[AZURE] Long audio detected ({duration_seconds:.1f}s) - using precision chunking")
+                result = await azure_pronunciation_chunked_processing(wav_data, transcript, audio_bytes)
+                print("[AZURE] Azure chunked pronunciation assessment completed")
+                return result
+        
+        async def audio_metrics_task():
+            """Advanced audio metrics analysis"""
+            print("[METRICS] Starting advanced audio metrics analysis...")
+            # Convert audio specifically for metrics analysis
+            wav_data_for_metrics = convert_audio_for_metrics(audio_bytes)
+            result = await audio_analyzer.analyze_comprehensive_metrics(wav_data_for_metrics, transcript)
+            print("[METRICS] Audio metrics analysis completed")
+            return result
+        
+        # Run slow analyses in parallel
+        azure_result, audio_metrics = await asyncio.gather(
+            azure_pronunciation_task(),
+            audio_metrics_task(),
+            return_exceptions=True
+        )
+        
+        # Check for exceptions in parallel tasks
+        if isinstance(azure_result, Exception):
+            print(f"[ERROR] Azure analysis failed: {azure_result}")
+            azure_result = {"error": str(azure_result)}
+        
+        if isinstance(audio_metrics, Exception):
+            print(f"[ERROR] Audio metrics failed: {audio_metrics}")
+            audio_metrics = {"error": str(audio_metrics)}
+        
+        # Generate student-friendly tips for audio metrics
+        student_friendly_tips = {}
+        if not isinstance(audio_metrics, dict) or "error" not in audio_metrics:
+            try:
+                student_friendly_tips = generate_student_friendly_audio_tips(audio_metrics)
+                print("[SLOW] Generated student-friendly audio tips")
+            except Exception as e:
+                print(f"[WARNING] Failed to generate audio tips: {e}")
+                student_friendly_tips = {"error": "Could not generate tips"}
+        
+        # Add tips to audio metrics
+        if isinstance(audio_metrics, dict) and "error" not in audio_metrics:
+            audio_metrics["student_friendly_tips"] = student_friendly_tips
+        
+        # Create slow result
+        slow_result = {
+            "session_id": session_id,
+            "azure_pronunciation": azure_result,
+            "audio_metrics": audio_metrics,
+            "processing_type": "hybrid_slow",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "services_used": ["azure_pronunciation", "advanced_audio_metrics"]
+        }
+        
+        print(f"[SUCCESS] Slow analysis completed successfully for session {session_id}")
+        # Return JSON-serializable data to frontend
+        return make_json_serializable(slow_result)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        print(f"[ERROR] Slow analysis failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Slow analysis failed: {str(e)}"
+        )
+
+
+@app.post("/api/analyze-hybrid-combine")
+async def analyze_hybrid_combine(
+    session: Annotated[Session, Depends(get_session)],
+    current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
+    session_id: str = Form(...),
+    fast_results: str = Form(...),  # JSON string of fast results
+    slow_results: str = Form(...)   # JSON string of slow results
+):
+    """
+    Combine fast and slow results and save to database
+    
+    This endpoint combines the results from fast and slow processing
+    and saves the complete session to the database for logged-in users.
+    
+    Args:
+    - session_id: Unique session identifier
+    - fast_results: JSON string of fast processing results
+    - slow_results: JSON string of slow processing results
+    
+    Returns:
+    - combined_results: Complete analysis results
+    """
+    try:
+        import json
+        
+        # Parse JSON strings
+        fast_data = json.loads(fast_results)
+        slow_data = json.loads(slow_results)
+        
+        # Combine results (matching original hybrid structure)
+        combined_result = {
+            "session_id": session_id,
+            "transcript": fast_data.get("transcript", ""),
+            "topic": fast_data.get("topic", ""),
+            "openai_coach_analysis": fast_data.get("openai_coach_analysis", {}),
+            "groq_language_analysis": fast_data.get("groq_language_analysis", {}),
+            "azure_pronunciation": slow_data.get("azure_pronunciation", {}),
+            "audio_metrics": slow_data.get("audio_metrics", {}),
+            "analysis_metadata": {
+                "processing_type": "hybrid_progressive",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "services_used": ["groq_whisper", "azure_pronunciation", "groq_llama", "openai_coach", "advanced_audio_metrics"],
+                "fast_processing_time": fast_data.get("timestamp", ""),
+                "slow_processing_time": slow_data.get("timestamp", "")
+            }
+        }
+        
+        # --- DATABASE PERSISTENCE (same as original hybrid endpoint) ---
+        if current_user:
+            print(f"[DATABASE] Saving combined session to database for user: {current_user.full_name}")
+            
+            # Make data JSON serializable before saving
+            serializable_result = make_json_serializable(combined_result)
+            
+            # Create database session using standardized wrapper format
+            db_session = DBSession(
+                topic=fast_data.get("topic", ""),
+                transcript=fast_data.get("transcript", ""),
+                feedback_json=json.dumps({
+                    "type": "hybrid_progressive", 
+                    "data": serializable_result
+                }),
+                student_id=current_user.id
+            )
+            
+            session.add(db_session)
+            try:
+                session.commit()
+                print("[DATABASE] Combined session saved to database successfully")
+            except Exception as e:
+                print(f"[ERROR] Database save failed: {e}")
+                session.rollback()
+        else:
+            print("[GUEST] Guest user - session not saved to database")
+        
+        print(f"[SUCCESS] Results combined successfully for session {session_id}")
+        return make_json_serializable(combined_result)
+        
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid JSON in results: {str(e)}"
+        )
+    except Exception as e:
+        print(f"[ERROR] Result combination failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Result combination failed: {str(e)}"
         )
 
 

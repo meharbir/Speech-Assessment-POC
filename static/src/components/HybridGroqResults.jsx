@@ -12,6 +12,40 @@ const FeedbackCard = ({ title, feedback, icon }) => (
     </div>
 );
 
+// Loading component for slow tabs
+const SlowTabLoader = ({ tabName }) => (
+    <div className="feedback-section" style={{ textAlign: 'center', padding: '40px' }}>
+        <div style={{ fontSize: '2em', marginBottom: '15px' }}>⏳</div>
+        <h3>Loading {tabName}...</h3>
+        <p style={{ color: '#666', marginTop: '10px' }}>
+            Processing Azure pronunciation analysis and voice quality metrics. 
+            This may take 30-60 seconds due to advanced audio processing.
+        </p>
+        <div style={{
+            width: '200px',
+            height: '4px',
+            backgroundColor: '#f0f0f0',
+            borderRadius: '2px',
+            margin: '20px auto',
+            overflow: 'hidden'
+        }}>
+            <div style={{
+                width: '30%',
+                height: '100%',
+                backgroundColor: '#007bff',
+                borderRadius: '2px',
+                animation: 'loading-slide 2s infinite ease-in-out'
+            }}></div>
+        </div>
+        <style>{`
+            @keyframes loading-slide {
+                0% { transform: translateX(-100px); }
+                100% { transform: translateX(300px); }
+            }
+        `}</style>
+    </div>
+);
+
 // Audio metrics card with progress bar and tips
 const AudioMetricCard = ({ title, data, icon }) => {
     const score = data?.score || 0;
@@ -69,14 +103,26 @@ const AudioMetricCard = ({ title, data, icon }) => {
     );
 };
 
-const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
+const HybridGroqResults = ({ 
+  results,          // Legacy mode results
+  fastResults,      // Progressive mode fast results
+  slowResults,      // Progressive mode slow results
+  slowLoading,      // Progressive mode loading state
+  sessionId,        // Progressive mode session tracking
+  onTryAgain, 
+  onChangeTopic 
+}) => {
   const [activeTab, setActiveTab] = useState('coach');
   const [showAllGrammar, setShowAllGrammar] = useState(false);
   const [showAllVocab, setShowAllVocab] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [aiComparison, setAiComparison] = useState('openai'); // 'openai' or 'groq'
 
-  // Extract data from results
+  // Determine if we're in progressive mode or legacy mode
+  const isProgressiveMode = fastResults && !results;
+  const currentResults = isProgressiveMode ? fastResults : results;
+  
+  // Extract data from current results
   const { 
     transcript, 
     topic,
@@ -84,16 +130,22 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
     groq_language_analysis,
     azure_pronunciation,
     audio_metrics 
-  } = results;
+  } = currentResults || {};
 
   // Extract the proper pronunciation data structure
-  // Azure returns full response, but PronunciationHighlights expects NBest[0]
-  const pronunciationAssessment = azure_pronunciation?.NBest?.[0] || azure_pronunciation;
+  // In progressive mode, use slow results for pronunciation data
+  const progressivePronunciation = isProgressiveMode ? slowResults?.azure_pronunciation : null;
+  const pronunciationData = progressivePronunciation || azure_pronunciation;
+  const pronunciationAssessment = pronunciationData?.NBest?.[0] || pronunciationData;
 
   // Get current AI analysis based on comparison toggle
   const currentAiAnalysis = aiComparison === 'openai' ? openai_coach_analysis : groq_language_analysis;
   const grammarErrors = currentAiAnalysis?.grammar_errors || [];
-  const studentFriendlyTips = audio_metrics?.student_friendly_tips || {};
+  
+  // In progressive mode, use slow results for audio metrics
+  const progressiveAudioMetrics = isProgressiveMode ? slowResults?.audio_metrics : null;
+  const currentAudioMetrics = progressiveAudioMetrics || audio_metrics;
+  const studentFriendlyTips = currentAudioMetrics?.student_friendly_tips || {};
 
   const playSampleAudio = async () => {
     if (isAudioPlaying || !currentAiAnalysis?.rewritten_sample) return;
@@ -267,30 +319,52 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
     </>
   );
 
-  const renderAudioMetricsTab = () => (
-    <>
-      <div className="feedback-section">
-        <h3>🎯 Voice Quality Analysis for Students</h3>
-        <p>Understanding your voice quality helps you become a better speaker!</p>
-      </div>
+  const renderAudioMetricsTab = () => {
+    // Show loading state if in progressive mode and slow results aren't ready
+    if (isProgressiveMode && slowLoading && !slowResults) {
+      return <SlowTabLoader tabName="Voice Quality Analysis" />;
+    }
 
-      <div className="score-cards-grid">
-        <AudioMetricCard
-          icon="🎵"
-          title="Pitch Variety"
-          data={studentFriendlyTips.pitch_variety}
-        />
-        <AudioMetricCard
-          icon="⏱️"
-          title="Speaking Fluency"
-          data={studentFriendlyTips.speaking_fluency}
-        />
-        <AudioMetricCard
-          icon="🔊"
-          title="Voice Clarity"
-          data={studentFriendlyTips.voice_clarity}
-        />
-      </div>
+    // Show error message if slow analysis failed
+    if (isProgressiveMode && slowResults?.error) {
+      return (
+        <div className="feedback-section" style={{ textAlign: 'center', padding: '40px' }}>
+          <div style={{ fontSize: '2em', marginBottom: '15px' }}>⚠️</div>
+          <h3>Voice Quality Analysis Unavailable</h3>
+          <p style={{ color: '#666', marginTop: '10px' }}>
+            {slowResults.error}
+          </p>
+          <p style={{ color: '#666', fontSize: '0.9em', marginTop: '15px' }}>
+            Your AI Coach analysis is still available in the first tab.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="feedback-section">
+          <h3>🎯 Voice Quality Analysis for Students</h3>
+          <p>Understanding your voice quality helps you become a better speaker!</p>
+        </div>
+
+        <div className="score-cards-grid">
+          <AudioMetricCard
+            icon="🎵"
+            title="Pitch Variety"
+            data={studentFriendlyTips.pitch_variety}
+          />
+          <AudioMetricCard
+            icon="⏱️"
+            title="Speaking Fluency"
+            data={studentFriendlyTips.speaking_fluency}
+          />
+          <AudioMetricCard
+            icon="🔊"
+            title="Voice Clarity"
+            data={studentFriendlyTips.voice_clarity}
+          />
+        </div>
 
       {/* Technical Details (Expandable) */}
       <div className="feedback-section">
@@ -301,31 +375,32 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
           <div style={{ marginTop: '15px', fontSize: '0.9em' }}>
             <h4>Pronunciation Analysis:</h4>
             <ul>
-              <li>Pitch Range: {audio_metrics?.pronunciation_analysis?.pitch_range_hz?.toFixed(1) || 'N/A'} Hz</li>
-              <li>Mean Pitch: {audio_metrics?.pronunciation_analysis?.pitch_mean_hz?.toFixed(1) || 'N/A'} Hz</li>
-              <li>Pitch Stability: {audio_metrics?.pronunciation_analysis?.pitch_std_hz?.toFixed(1) || 'N/A'} Hz std dev</li>
-              <li>Monotonous: {audio_metrics?.pronunciation_analysis?.is_monotonous ? 'Yes' : 'No'}</li>
+              <li>Pitch Range: {currentAudioMetrics?.pronunciation_analysis?.pitch_range_hz?.toFixed(1) || 'N/A'} Hz</li>
+              <li>Mean Pitch: {currentAudioMetrics?.pronunciation_analysis?.pitch_mean_hz?.toFixed(1) || 'N/A'} Hz</li>
+              <li>Pitch Stability: {currentAudioMetrics?.pronunciation_analysis?.pitch_std_hz?.toFixed(1) || 'N/A'} Hz std dev</li>
+              <li>Monotonous: {currentAudioMetrics?.pronunciation_analysis?.is_monotonous ? 'Yes' : 'No'}</li>
             </ul>
             
             <h4>Fluency Metrics:</h4>
             <ul>
-              <li>Speaking Rate: {audio_metrics?.fluency_metrics?.speaking_rate_wpm?.toFixed(0) || 'N/A'} WPM</li>
-              <li>Total Pauses: {audio_metrics?.fluency_metrics?.total_pauses || 'N/A'}</li>
-              <li>Long Pauses: {audio_metrics?.fluency_metrics?.long_pauses || 'N/A'}</li>
-              <li>Rhythm Score: {audio_metrics?.fluency_metrics?.rhythm_consistency_score?.toFixed(0) || 'N/A'}/100</li>
+              <li>Speaking Rate: {currentAudioMetrics?.fluency_metrics?.speaking_rate_wpm?.toFixed(0) || 'N/A'} WPM</li>
+              <li>Total Pauses: {currentAudioMetrics?.fluency_metrics?.total_pauses || 'N/A'}</li>
+              <li>Long Pauses: {currentAudioMetrics?.fluency_metrics?.long_pauses || 'N/A'}</li>
+              <li>Rhythm Score: {currentAudioMetrics?.fluency_metrics?.rhythm_consistency_score?.toFixed(0) || 'N/A'}/100</li>
             </ul>
             
             <h4>Voice Quality:</h4>
             <ul>
-              <li>Jitter: {audio_metrics?.voice_quality?.jitter_percent?.toFixed(2) || 'N/A'}% (Normal: &lt;1.04%)</li>
-              <li>Shimmer: {audio_metrics?.voice_quality?.shimmer_percent?.toFixed(2) || 'N/A'}% (Normal: &lt;3.81%)</li>
-              <li>HNR: {audio_metrics?.voice_quality?.hnr_db?.toFixed(1) || 'N/A'} dB (Good: &gt;20 dB)</li>
+              <li>Jitter: {currentAudioMetrics?.voice_quality?.jitter_percent?.toFixed(2) || 'N/A'}% (Normal: &lt;1.04%)</li>
+              <li>Shimmer: {currentAudioMetrics?.voice_quality?.shimmer_percent?.toFixed(2) || 'N/A'}% (Normal: &lt;3.81%)</li>
+              <li>HNR: {currentAudioMetrics?.voice_quality?.hnr_db?.toFixed(1) || 'N/A'} dB (Good: &gt;20 dB)</li>
             </ul>
           </div>
         </details>
       </div>
     </>
-  );
+    );
+  };
 
   return (
     <div className="impromptu-dashboard">
@@ -356,16 +431,23 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
           className={`tab-button ${activeTab === 'coach' ? 'active' : ''}`} 
           onClick={() => setActiveTab('coach')}>
           🤖 AI Coach Comparison
+          {isProgressiveMode && <span style={{ color: '#4CAF50', marginLeft: '5px' }}>✓</span>}
         </button>
         <button 
           className={`tab-button ${activeTab === 'pronunciation' ? 'active' : ''}`} 
           onClick={() => setActiveTab('pronunciation')}>
           🎙️ Pronunciation Details
+          {isProgressiveMode && slowLoading && !slowResults && <span style={{ color: '#FF9800', marginLeft: '5px' }}>⏳</span>}
+          {isProgressiveMode && slowResults && !slowResults.error && <span style={{ color: '#4CAF50', marginLeft: '5px' }}>✓</span>}
+          {isProgressiveMode && slowResults?.error && <span style={{ color: '#F44336', marginLeft: '5px' }}>⚠️</span>}
         </button>
         <button 
           className={`tab-button ${activeTab === 'audio' ? 'active' : ''}`} 
           onClick={() => setActiveTab('audio')}>
           📊 Voice Quality Insights
+          {isProgressiveMode && slowLoading && !slowResults && <span style={{ color: '#FF9800', marginLeft: '5px' }}>⏳</span>}
+          {isProgressiveMode && slowResults && !slowResults.error && <span style={{ color: '#4CAF50', marginLeft: '5px' }}>✓</span>}
+          {isProgressiveMode && slowResults?.error && <span style={{ color: '#F44336', marginLeft: '5px' }}>⚠️</span>}
         </button>
       </div>
 
@@ -373,7 +455,23 @@ const HybridGroqResults = ({ results, onTryAgain, onChangeTopic }) => {
       <div className="tab-content">
         {activeTab === 'coach' && renderAiCoachTab()}
         {activeTab === 'pronunciation' && (
-          <PronunciationHighlights assessment={pronunciationAssessment} />
+          // Show loading state if in progressive mode and slow results aren't ready
+          isProgressiveMode && slowLoading && !slowResults ? (
+            <SlowTabLoader tabName="Pronunciation Analysis" />
+          ) : isProgressiveMode && slowResults?.error ? (
+            <div className="feedback-section" style={{ textAlign: 'center', padding: '40px' }}>
+              <div style={{ fontSize: '2em', marginBottom: '15px' }}>⚠️</div>
+              <h3>Pronunciation Analysis Unavailable</h3>
+              <p style={{ color: '#666', marginTop: '10px' }}>
+                {slowResults.error}
+              </p>
+              <p style={{ color: '#666', fontSize: '0.9em', marginTop: '15px' }}>
+                Your AI Coach analysis is still available in the first tab.
+              </p>
+            </div>
+          ) : (
+            <PronunciationHighlights assessment={pronunciationAssessment} />
+          )
         )}
         {activeTab === 'audio' && renderAudioMetricsTab()}
       </div>
