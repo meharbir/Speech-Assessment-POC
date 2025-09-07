@@ -1,8 +1,10 @@
 import os
 import json
+import re
 from groq import Groq
 from typing import Dict, Any, Optional
 import logging
+from rubrics import CBSE_ASL_DETAILED_RUBRIC
 
 logger = logging.getLogger(__name__)
 
@@ -68,21 +70,22 @@ class GroqService:
             # Construct the analysis prompt
             prompt = self._build_analysis_prompt(transcript, topic)
             
-            # Call LLaMA via Groq
+            # Call LLaMA via Groq with strict JSON formatting instructions
             response = self.client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert English language teacher providing detailed feedback for CBSE students. Provide structured JSON responses."
+                        "content": "You are a JSON generator. Output ONLY valid JSON. No text before or after. No comments. No explanations. Start with { and end with }."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.3,
-                max_tokens=2000
+                temperature=0.0,  # Fully deterministic
+                max_tokens=2500,  # Increased for longer responses
+                response_format={"type": "json_object"} if hasattr(self.client, 'response_format') else None
             )
             
             # Parse the response
@@ -95,88 +98,155 @@ class GroqService:
             raise Exception(f"Analysis failed: {str(e)}")
     
     def _build_analysis_prompt(self, transcript: str, topic: str) -> str:
-        """Build the analysis prompt for LLaMA"""
+        """Build the analysis prompt for LLaMA using the same rubric as OpenAI"""
         return f"""
-Analyze this English speech transcript from a CBSE student speaking about "{topic}":
+You are an expert AI English Tutor for a student in India. Your task is to provide a comprehensive evaluation of their impromptu speech based on the official CBSE ASL rubric. Your final scores MUST be converted to a 100-point scale (e.g., a rubric score of 4/5 is 80/100).
 
-Transcript: "{transcript}"
+--- OFFICIAL CBSE ASL DETAILED RUBRIC ---
+{CBSE_ASL_DETAILED_RUBRIC}
+--- END OF RUBRIC ---
 
-Provide a comprehensive analysis in JSON format with the following structure:
+The student was asked to speak on the topic: "{topic}".
+The student's transcript is: "{transcript}"
+
+You MUST evaluate the transcript strictly against the provided detailed rubric. Your feedback and scores must directly reflect the criteria outlined. Provide at least 3-5 vocabulary enhancement suggestions with specific words/phrases from the transcript.
+
+CRITICAL INSTRUCTIONS:
+1. Output ONLY the JSON object below
+2. No text before or after the JSON
+3. Use double quotes for all strings
+4. No trailing commas
+5. Escape any quotes inside string values with \"
+6. Ensure all brackets and braces are properly closed
+
+Output exactly this structure:
 {{
-    "grammar_score": <score 0-100>,
+    "relevance_score": <integer from 0-100, based on the 'INTERACTION' rubric criteria>,
+    "relevance_feedback": "<string: A personalized comment on how well the student's contribution was relevant to the topic, referencing the rubric.>",
+    "fluency_score": <integer from 0-100, based on the 'FLUENCY & COHERENCE' rubric criteria>,
+    "fluency_feedback": "<string: Personalized comment on pace, rhythm, and coherence, referencing the rubric.>",
+    "pronunciation_score": <integer from 0-100, based on the 'PRONUNCIATION' rubric criteria>,
+    "pronunciation_feedback": "<string: A summary of the student's pronunciation and articulation clarity, referencing the rubric.>",
+    "grammar_score": <integer from 0-100, based on the 'LANGUAGE' rubric criteria for grammar>,
     "grammar_errors": [
-        {{
-            "error": "<exact text with error>",
-            "correction": "<corrected version>",
-            "explanation": "<brief explanation of the grammar rule>"
-        }}
+        {{"error": "<string: Phrase with error>", "correction": "<string: Corrected phrase>", "explanation": "<string: Simple explanation>"}}
     ],
-    "vocabulary_score": <score 0-100>,
-    "vocabulary_feedback": "<overall vocabulary assessment>",
+    "vocabulary_score": <integer from 0-100, based on the 'LANGUAGE' rubric criteria for vocabulary>,
+    "vocabulary_feedback": "<string: Personalized comment on word choice, referencing the rubric.>",
     "vocabulary_suggestions": [
-        {{
-            "original": "<simple word/phrase used>",
-            "enhanced": "<better alternative>",
-            "explanation": "<why this is better>"
-        }}
+        {{"original": "<string: word/phrase from transcript>", "enhanced": "<string: better alternative>", "explanation": "<string: why it's better>"}}
     ],
-    "fluency_score": <score 0-100>,
-    "fluency_feedback": "<assessment of fluency and natural flow>",
-    "coherence_score": <score 0-100>,
-    "coherence_feedback": "<assessment of logical structure>",
-    "relevance_feedback": "<how well the speech addresses the topic>",
+    "detailed_fluency_coherence_analysis": "<string: Combined detailed analysis of both fluency and coherence with specific examples from the transcript, referencing the CBSE rubric criteria>",
     "positive_highlights": [
-        "<specific things done well>"
+        "<string: A specific, positive comment aligned with the rubric's goals.>"
     ],
-    "improvement_areas": [
-        "<specific areas to work on>"
-    ],
-    "rewritten_sample": "<provide a corrected and enhanced version of one key sentence from the transcript>"
+    "rewritten_sample": "<string: Rewrite the user's speech into an improved version that would score higher against the rubric.>"
 }}
 
-Focus on:
-1. Grammar accuracy and common errors for Indian English learners
-2. Vocabulary appropriateness for CBSE level
-3. Sentence structure and coherence
-4. Practical, actionable feedback
-
-Be encouraging but specific about areas for improvement.
+Start your response with {{ and end with }}. Nothing else.
 """
     
     def _parse_llama_response(self, response_text: str) -> Dict[str, Any]:
         """Parse LLaMA response, handling both JSON and text formats"""
         try:
-            # Try to parse as JSON first
-            # Remove any markdown code blocks if present
+            # Log the raw response for debugging
+            logger.info(f"Raw LLaMA response (first 500 chars): {response_text[:500]}")
+            
+            # Aggressive JSON extraction and cleaning
             cleaned_text = response_text.strip()
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.startswith("```"):
-                cleaned_text = cleaned_text[3:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
             
-            return json.loads(cleaned_text.strip())
+            # Try to find JSON boundaries
+            json_start = cleaned_text.find('{')
+            json_end = cleaned_text.rfind('}')
             
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse LLaMA response as JSON, returning structured fallback")
-            # Fallback structure if JSON parsing fails
-            return {
-                "grammar_score": 70,
-                "grammar_errors": [],
-                "vocabulary_score": 70,
-                "vocabulary_feedback": "Analysis in progress",
-                "vocabulary_suggestions": [],
-                "fluency_score": 70,
-                "fluency_feedback": response_text[:500],
-                "coherence_score": 70,
-                "coherence_feedback": "See detailed feedback",
-                "relevance_feedback": "Topic addressed",
-                "positive_highlights": ["Clear speech attempted"],
-                "improvement_areas": ["Continue practicing"],
-                "rewritten_sample": "",
-                "raw_response": response_text
-            }
+            if json_start != -1 and json_end != -1:
+                json_str = cleaned_text[json_start:json_end+1]
+                
+                # Remove any markdown artifacts
+                json_str = json_str.replace('```json', '').replace('```', '')
+                
+                # Fix common JSON issues
+                json_str = self._fix_common_json_issues(json_str)
+                
+                # Attempt to parse
+                parsed = json.loads(json_str)
+                
+                # Validate required fields exist
+                required_fields = ['grammar_score', 'vocabulary_score', 'fluency_score', 'relevance_score', 'pronunciation_score']
+                if all(field in parsed for field in required_fields):
+                    logger.info("Successfully parsed LLaMA JSON response")
+                    return parsed
+                else:
+                    logger.warning(f"Missing required fields in LLaMA response: {[f for f in required_fields if f not in parsed]}")
+            
+            # If parsing fails, log the actual response for debugging
+            logger.warning(f"LLaMA response not valid JSON. Full response: {response_text}")
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error at line {getattr(e, 'lineno', '?')} col {getattr(e, 'colno', '?')}: {e}")
+            # Log the exact character causing problems
+            if hasattr(e, 'pos') and e.pos < len(json_str):
+                problem_char = json_str[e.pos] if e.pos < len(json_str) else 'EOF'
+                if problem_char != 'EOF':
+                    logger.error(f"Problem character at position {e.pos}: '{problem_char}' (ASCII: {ord(problem_char)})")
+            logger.error(f"Problematic JSON: {response_text}")
+        except Exception as e:
+            logger.error(f"Unexpected parsing error: {e}")
+        
+        # Return comprehensive fallback matching OpenAI structure
+        return {
+            "relevance_score": 75,
+            "relevance_feedback": "Analysis processing - topic addressed appropriately",
+            "fluency_score": 75,
+            "fluency_feedback": "Analysis in progress",
+            "pronunciation_score": 75,
+            "pronunciation_feedback": "Analysis in progress",
+            "grammar_score": 75,
+            "grammar_errors": [],
+            "vocabulary_score": 75,
+            "vocabulary_feedback": "Analysis processing - see raw response",
+            "vocabulary_suggestions": [],
+            "detailed_fluency_coherence_analysis": "Analysis processing - comprehensive review in progress",
+            "positive_highlights": ["Speech recorded successfully"],
+            "rewritten_sample": "",
+            "parse_error": True,
+            "raw_response": response_text[:1000]  # Include for debugging
+        }
+    
+    def _fix_common_json_issues(self, json_str: str) -> str:
+        """Fix common JSON formatting issues from LLaMA responses"""
+        # Remove trailing commas before closing braces/brackets
+        json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+        
+        # Strip all control characters except newline and tab
+        json_str = ''.join(ch for ch in json_str if ord(ch) >= 32 or ch in '\n\t')
+        
+        # NEW: Handle newlines properly in JSON strings
+        # Split into lines but preserve the structure
+        import json
+        try:
+            # Try to parse as-is first
+            test_parse = json.loads(json_str)
+            # If it works, we're done with newline handling
+        except:
+            # If parsing fails, escape newlines in string values only
+            # This is a safer approach - replace newlines with spaces
+            json_str = json_str.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+        
+        # NEW: Remove any zero-width characters and other invisible Unicode
+        json_str = re.sub(r'[\u200b-\u200f\u202a-\u202e\ufeff]', '', json_str)
+        
+        # Remove any text before the first { or after the last }
+        first_brace = json_str.find('{')
+        last_brace = json_str.rfind('}')
+        if first_brace != -1 and last_brace != -1:
+            json_str = json_str[first_brace:last_brace+1]
+        
+        # Final cleanup - ensure no trailing commas before closing brackets
+        json_str = re.sub(r',\s*}', '}', json_str)
+        json_str = re.sub(r',\s*]', ']', json_str)
+        
+        return json_str
     
     async def test_connection(self) -> bool:
         """Test if Groq API connection is working"""

@@ -3,6 +3,7 @@ import axios from 'axios';
 import './MyProgressPage.css';
 import ImpromptuResultsDashboard from '../components/ImpromptuResultsDashboard';
 import ResultsDashboard from '../components/ResultsDashboard'; // For pronunciation
+import HybridGroqResults from '../components/HybridGroqResults'; // For hybrid analysis
 
 // Helper component to render the correct summary scores for the list view
 const SessionScores = ({ feedback }) => {
@@ -48,6 +49,34 @@ const SessionScores = ({ feedback }) => {
                 <div className="score-item">
                     <span className="score-value">{feedback.data.CompletenessScore ?? 'N/A'}</span>
                     <span className="score-label">Completeness</span>
+                </div>
+            </div>
+        );
+    }
+
+    if (feedback.type === 'hybrid_groq') {
+        // Extract key scores from hybrid analysis
+        const groqAnalysis = feedback.data.groq_language_analysis || {};
+        const azurePronunciation = feedback.data.azure_pronunciation?.NBest?.[0] || {};
+        const openaiAnalysis = feedback.data.openai_coach_analysis || {};
+        
+        return (
+            <div className="session-scores">
+                <div className="score-item">
+                    <span className="score-value">{groqAnalysis.grammar_score || openaiAnalysis.grammar_score || 'N/A'}</span>
+                    <span className="score-label">Grammar</span>
+                </div>
+                <div className="score-item">
+                    <span className="score-value">{groqAnalysis.vocabulary_score || openaiAnalysis.vocabulary_score || 'N/A'}</span>
+                    <span className="score-label">Vocabulary</span>
+                </div>
+                <div className="score-item">
+                    <span className="score-value">{azurePronunciation.PronunciationScore || azurePronunciation.AccuracyScore || 'N/A'}</span>
+                    <span className="score-label">Pronunciation</span>
+                </div>
+                <div className="score-item">
+                    <span className="score-value">{groqAnalysis.fluency_score || openaiAnalysis.fluency_score || 'N/A'}</span>
+                    <span className="score-label">Fluency</span>
                 </div>
             </div>
         );
@@ -107,6 +136,9 @@ export const MyProgressPage = ({ userId }) => { // Add export and userId prop
                 azureAssessment: selectedSession.feedback.data
             };
             detailView = <ResultsDashboard results={resultsForDashboard} />;
+        } else if (selectedSession.feedback?.type === 'hybrid_groq') {
+            // Pass the hybrid analysis data directly to HybridGroqResults
+            detailView = <HybridGroqResults results={selectedSession.feedback.data} />;
         }
 
         return (

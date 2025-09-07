@@ -11,6 +11,8 @@ import math
 import tempfile
 import asyncio
 import secrets
+import logging
+import re
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -45,6 +47,7 @@ from audio_metrics import AdvancedAudioAnalyzer
 # --- CONFIGURATION & INITIALIZATION ---
 load_dotenv()
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # --- DATABASE CONNECTION ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -270,6 +273,56 @@ def convert_audio_with_ffmpeg(audio_bytes: bytes) -> bytes:
         return process.stdout
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"FFmpeg failed: {e.stderr.decode()}")
+
+def convert_audio_for_metrics(audio_bytes: bytes) -> bytes:
+    """
+    Special converter for audio metrics analysis in hybrid mode.
+    Converts WebM/any format to proper WAV with specific requirements for librosa/parselmouth.
+    """
+    try:
+        # Create temp files for conversion
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_in:
+            temp_in.write(audio_bytes)
+            temp_in_path = temp_in.name
+        
+        temp_out_path = tempfile.mktemp(suffix='.wav')
+        
+        try:
+            # More specific FFmpeg conversion for audio analysis
+            ffmpeg_command = [
+                FFMPEG_PATH,
+                '-i', temp_in_path,
+                '-ac', '1',  # Mono
+                '-ar', '16000',  # 16kHz (standard for speech)
+                '-acodec', 'pcm_s16le',  # PCM 16-bit little-endian
+                '-f', 'wav',  # Explicit WAV format
+                temp_out_path,
+                '-y'  # Overwrite
+            ]
+            
+            process = subprocess.run(
+                ffmpeg_command, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                check=True
+            )
+            
+            # Read the converted WAV
+            with open(temp_out_path, 'rb') as f:
+                wav_data = f.read()
+            
+            return wav_data
+            
+        finally:
+            # Cleanup temp files
+            if os.path.exists(temp_in_path):
+                os.unlink(temp_in_path)
+            if os.path.exists(temp_out_path):
+                os.unlink(temp_out_path)
+                
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg conversion for metrics failed: {e.stderr.decode()}")
+        raise HTTPException(status_code=500, detail=f"Audio conversion failed: {e.stderr.decode()}")
 
 def get_pronunciation_assessment(wav_data: bytes, reference_text: str) -> dict:
     endpoint = f"https://{AZURE_SPEECH_REGION}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US"
@@ -1392,6 +1445,219 @@ def generate_student_friendly_audio_tips(audio_metrics: dict) -> dict:
     return tips
 
 
+# --- AZURE PRONUNCIATION CHUNKING FUNCTIONS (FOR HYBRID MODE ONLY) ---
+def create_precise_chunks(wav_data: bytes, stt_result: dict, transcript: str):
+    """Create chunks using precise word timestamps from Azure STT"""
+    if not stt_result.get("NBest") or not stt_result["NBest"][0].get("Words"):
+        # Fallback to simple time-based chunking if no word timings
+        return create_simple_time_chunks(wav_data, transcript)
+    
+    words_with_timing = stt_result["NBest"][0]["Words"]
+    sentences = re.split(r'[.!?]+', transcript)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    chunks = []
+    sample_rate = 16000
+    bytes_per_sample = 2  # 16-bit audio
+    
+    current_word_idx = 0
+    
+    for sentence_idx, sentence in enumerate(sentences):
+        sentence_words = sentence.strip().split()
+        
+        if current_word_idx >= len(words_with_timing) or not sentence_words:
+            break
+            
+        # Find start time of first word in sentence
+        start_word = words_with_timing[current_word_idx]
+        start_time_ticks = start_word["Offset"]
+        start_time_seconds = start_time_ticks / 10000000.0
+        
+        # Find end time of last word in sentence
+        end_word_idx = min(current_word_idx + len(sentence_words) - 1, len(words_with_timing) - 1)
+        end_word = words_with_timing[end_word_idx]
+        end_time_ticks = end_word["Offset"] + end_word["Duration"]
+        end_time_seconds = end_time_ticks / 10000000.0
+        
+        # Extract precise audio chunk
+        start_byte = int(start_time_seconds * sample_rate * bytes_per_sample)
+        end_byte = int(end_time_seconds * sample_rate * bytes_per_sample)
+        audio_chunk = wav_data[start_byte:end_byte]
+        
+        # Skip very short chunks (less than 1 second)
+        if end_time_seconds - start_time_seconds < 1.0:
+            current_word_idx += len(sentence_words)
+            continue
+        
+        chunks.append({
+            'audio': audio_chunk,
+            'text': sentence,
+            'metadata': {
+                'chunk_id': sentence_idx,
+                'start_time': start_time_seconds,
+                'end_time': end_time_seconds,
+                'word_count': len(sentence_words),
+                'text_preview': sentence[:100] + '...' if len(sentence) > 100 else sentence
+            }
+        })
+        
+        current_word_idx += len(sentence_words)
+    
+    return chunks
+
+def create_simple_time_chunks(wav_data: bytes, transcript: str):
+    """Fallback chunking based on time when word timestamps unavailable"""
+    duration_seconds = len(wav_data) / (16000 * 2)
+    chunk_duration = 25  # seconds
+    num_chunks = math.ceil(duration_seconds / chunk_duration)
+    
+    chunks = []
+    words = transcript.split()
+    words_per_chunk = len(words) // num_chunks
+    
+    for i in range(num_chunks):
+        start_byte = int(i * chunk_duration * 16000 * 2)
+        end_byte = int(min((i + 1) * chunk_duration * 16000 * 2, len(wav_data)))
+        
+        start_word_idx = i * words_per_chunk
+        end_word_idx = min((i + 1) * words_per_chunk, len(words))
+        
+        audio_chunk = wav_data[start_byte:end_byte]
+        text_chunk = ' '.join(words[start_word_idx:end_word_idx])
+        
+        chunks.append({
+            'audio': audio_chunk,
+            'text': text_chunk,
+            'metadata': {
+                'chunk_id': i,
+                'start_time': i * chunk_duration,
+                'end_time': min((i + 1) * chunk_duration, duration_seconds),
+                'word_count': len(text_chunk.split()),
+                'text_preview': text_chunk[:100] + '...' if len(text_chunk) > 100 else text_chunk,
+                'method': 'time_based_fallback'
+            }
+        })
+    
+    return chunks
+
+def aggregate_pronunciation_results(chunk_results: List[dict]) -> dict:
+    """Intelligently combine multiple pronunciation assessments"""
+    valid_chunks = [r for r in chunk_results if 'error' not in r and r.get('NBest')]
+    
+    if not valid_chunks:
+        return {"error": "All chunks failed processing", "NBest": []}
+    
+    # Collect all words from all chunks
+    all_words = []
+    total_accuracy_scores = []
+    
+    for chunk in valid_chunks:
+        if chunk.get('NBest') and len(chunk['NBest']) > 0:
+            nbest = chunk['NBest'][0]
+            
+            # Collect words
+            words = nbest.get('Words', [])
+            for word in words:
+                if 'chunk_info' in chunk:
+                    word['source_chunk'] = chunk['chunk_info']['chunk_id']
+            all_words.extend(words)
+            
+            # Collect accuracy score
+            if 'AccuracyScore' in nbest:
+                total_accuracy_scores.append(nbest['AccuracyScore'])
+    
+    # Calculate weighted average
+    if total_accuracy_scores:
+        avg_accuracy = sum(total_accuracy_scores) / len(total_accuracy_scores)
+    else:
+        avg_accuracy = 0
+    
+    # Calculate overall pronunciation metrics
+    word_scores = [w.get('AccuracyScore', 0) for w in all_words if w.get('AccuracyScore', 0) > 0]
+    
+    aggregated_result = {
+        'RecognitionStatus': 'Success' if valid_chunks else 'Failed',
+        'NBest': [{
+            'AccuracyScore': avg_accuracy,
+            'PronunciationScore': avg_accuracy,  # Use accuracy as pronunciation score
+            'FluencyScore': avg_accuracy,  # Provide fluency score for compatibility
+            'Words': all_words,
+            'Display': ' '.join([w.get('Word', '') for w in all_words]),
+            'Confidence': sum([w.get('Confidence', 0) for w in all_words]) / len(all_words) if all_words else 0,
+            'ChunkingInfo': {
+                'total_chunks_processed': len(valid_chunks),
+                'failed_chunks': len(chunk_results) - len(valid_chunks),
+                'total_words': len(all_words),
+                'average_word_accuracy': sum(word_scores) / len(word_scores) if word_scores else 0,
+                'processing_method': 'chunked_aggregated'
+            }
+        }],
+        'ChunkBreakdown': [
+            {
+                'chunk_id': chunk.get('chunk_info', {}).get('chunk_id', i),
+                'accuracy': chunk['NBest'][0].get('AccuracyScore', 0) if chunk.get('NBest') else 0,
+                'word_count': len(chunk['NBest'][0].get('Words', [])) if chunk.get('NBest') else 0,
+                'text_preview': chunk.get('chunk_info', {}).get('text_preview', 'N/A')
+            }
+            for i, chunk in enumerate(chunk_results) if 'error' not in chunk
+        ]
+    }
+    
+    return aggregated_result
+
+async def azure_pronunciation_chunked_processing(wav_data: bytes, transcript: str, original_audio_bytes: bytes):
+    """Process long audio using precision chunking with parallel execution"""
+    
+    # Step 1: Get precise word timestamps from Azure STT
+    print("[AZURE] Getting word-level timestamps for precision chunking...")
+    try:
+        azure_stt_result = get_stt_result(wav_data)
+    except Exception as e:
+        print(f"[AZURE] STT for timestamps failed: {e}, using fallback chunking")
+        azure_stt_result = {}
+    
+    # Step 2: Create sentence-aligned chunks using precise timestamps
+    chunks = create_precise_chunks(wav_data, azure_stt_result, transcript)
+    
+    if not chunks:
+        print("[AZURE] No valid chunks created, returning error")
+        return {"error": "Failed to create audio chunks", "NBest": []}
+    
+    print(f"[AZURE] Created {len(chunks)} chunks for processing")
+    
+    # Step 3: Process chunks in parallel with rate limiting
+    semaphore = asyncio.Semaphore(3)  # Limit concurrent requests
+    
+    async def process_single_chunk(chunk):
+        async with semaphore:
+            try:
+                print(f"[AZURE] Processing chunk {chunk['metadata']['chunk_id']}: {chunk['metadata']['text_preview']}")
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, 
+                    get_pronunciation_assessment, 
+                    chunk['audio'], 
+                    chunk['text']
+                )
+                result['chunk_info'] = chunk['metadata']
+                return result
+            except Exception as e:
+                print(f"[AZURE] Chunk {chunk['metadata']['chunk_id']} failed: {e}")
+                return {
+                    'error': str(e), 
+                    'chunk_info': chunk['metadata'],
+                    'NBest': []
+                }
+    
+    # Execute parallel processing
+    chunk_results = await asyncio.gather(*[process_single_chunk(chunk) for chunk in chunks])
+    
+    # Step 4: Aggregate results
+    print("[AZURE] Aggregating chunk results...")
+    aggregated = aggregate_pronunciation_results(chunk_results)
+    
+    return aggregated
+
 @app.post("/api/analyze-hybrid-groq")
 async def analyze_hybrid_groq(
     session: Annotated[Session, Depends(get_session)],
@@ -1436,13 +1702,24 @@ async def analyze_hybrid_groq(
         print("[STEP B] Running parallel analyses...")
         
         async def azure_pronunciation_task():
-            """Azure pronunciation assessment using Groq transcript as reference"""
+            """Azure pronunciation assessment with automatic chunking for long audio"""
             print("[AZURE] Starting Azure pronunciation assessment...")
             # Convert audio for Azure (needs WAV format)
             wav_data = convert_audio_with_ffmpeg(audio_bytes)
-            result = get_pronunciation_assessment(wav_data, transcript)
-            print("[AZURE] Azure pronunciation assessment completed")
-            return result
+            duration_seconds = len(wav_data) / (16000 * 2)  # Calculate duration
+            
+            if duration_seconds <= 30:
+                # Short audio - use direct processing (existing functionality)
+                print("[AZURE] Short audio detected - using direct processing")
+                result = get_pronunciation_assessment(wav_data, transcript)
+                print("[AZURE] Azure pronunciation assessment completed")
+                return result
+            else:
+                # Long audio - use precision chunking
+                print(f"[AZURE] Long audio detected ({duration_seconds:.1f}s) - using precision chunking")
+                result = await azure_pronunciation_chunked_processing(wav_data, transcript, audio_bytes)
+                print("[AZURE] Azure chunked pronunciation assessment completed")
+                return result
         
         async def groq_language_task():
             """Groq LLaMA language analysis"""
@@ -1454,7 +1731,9 @@ async def analyze_hybrid_groq(
         async def audio_metrics_task():
             """Advanced audio metrics analysis"""
             print("[METRICS] Starting advanced audio metrics analysis...")
-            result = await audio_analyzer.analyze_comprehensive_metrics(audio_bytes, transcript)
+            # Convert audio specifically for metrics analysis
+            wav_data_for_metrics = convert_audio_for_metrics(audio_bytes)
+            result = await audio_analyzer.analyze_comprehensive_metrics(wav_data_for_metrics, transcript)
             print("[METRICS] Audio metrics analysis completed")
             return result
         

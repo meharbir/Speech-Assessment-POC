@@ -243,6 +243,7 @@ class AdvancedAudioAnalyzer:
     def _analyze_voice_quality(self, audio_path: str) -> Dict[str, Any]:
         """
         Analyze voice quality metrics using Praat/Parselmouth
+        WITH GRACEFUL FALLBACK for each metric
         
         Includes:
         - Jitter (local) - voice stability
@@ -253,23 +254,51 @@ class AdvancedAudioAnalyzer:
             # Load audio with parselmouth
             sound = parselmouth.Sound(audio_path)
             
-            # Extract voice quality metrics
+            # Check minimum duration for analysis
+            if sound.duration < 0.5:
+                logger.warning(f"Audio too short for voice quality analysis: {sound.duration}s")
+                return {
+                    "jitter_percent": 0,
+                    "shimmer_percent": 0,
+                    "hnr_db": 0,
+                    "is_jitter_normal": True,
+                    "is_shimmer_normal": True,
+                    "is_hnr_good": False,
+                    "error": "Audio too short for detailed voice analysis",
+                    "feedback": "Recording too brief for voice quality assessment"
+                }
+            
+            # Try to extract each metric with individual error handling
+            
             # Jitter (normal < 1.04%)
-            jitter = praat.call(sound, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
-            jitter_percent = jitter * 100
+            try:
+                jitter = praat.call(sound, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
+                jitter_percent = jitter * 100
+                is_jitter_normal = jitter_percent < 1.04
+            except Exception as e:
+                logger.warning(f"Jitter calculation failed: {e}")
+                jitter_percent = 0
+                is_jitter_normal = True
             
             # Shimmer (normal < 3.81%)
-            shimmer = praat.call(sound, "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
-            shimmer_percent = shimmer * 100
+            try:
+                shimmer = praat.call(sound, "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
+                shimmer_percent = shimmer * 100
+                is_shimmer_normal = shimmer_percent < 3.81
+            except Exception as e:
+                logger.warning(f"Shimmer calculation failed: {e}")
+                shimmer_percent = 0
+                is_shimmer_normal = True
             
             # HNR (good > 20 dB)
-            hnr_values = praat.call(sound, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
-            hnr_mean = praat.call(hnr_values, "Get mean", 0, 0)
-            
-            # Assess voice quality
-            is_jitter_normal = jitter_percent < 1.04
-            is_shimmer_normal = shimmer_percent < 3.81
-            is_hnr_good = hnr_mean > 20
+            try:
+                hnr_values = praat.call(sound, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
+                hnr_mean = praat.call(hnr_values, "Get mean", 0, 0)
+                is_hnr_good = hnr_mean > 20
+            except Exception as e:
+                logger.warning(f"HNR calculation failed: {e}")
+                hnr_mean = 0
+                is_hnr_good = False
             
             # Generate feedback
             feedback = self._generate_voice_quality_feedback(
@@ -294,7 +323,14 @@ class AdvancedAudioAnalyzer:
         except Exception as e:
             logger.error(f"Voice quality analysis failed: {str(e)}")
             return {
-                "error": str(e)
+                "jitter_percent": 0,
+                "shimmer_percent": 0,
+                "hnr_db": 0,
+                "is_jitter_normal": True,
+                "is_shimmer_normal": True,
+                "is_hnr_good": False,
+                "error": str(e),
+                "feedback": "Voice quality analysis temporarily unavailable"
             }
     
     def _calculate_assessments(self, pronunciation: Dict, fluency: Dict, voice_quality: Dict) -> Dict[str, Any]:
